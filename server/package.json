@@ -1,0 +1,12 @@
+{
+  "name": "kasir-buket-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Server sinkron Kasir Buket: auth, sinkron push/pull, realtime SSE, backup harian, penyaji aplikasi web.",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/index.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+  }
+}

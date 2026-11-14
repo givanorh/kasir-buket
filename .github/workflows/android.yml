@@ -1,0 +1,62 @@
+# Membangun APK Kasir Buket di GitHub (gratis untuk pemakaian wajar).
+# Hasil: tab Actions › run terbaru › Artifacts › "kasir-buket-apk".
+name: Build APK Android
+
+on:
+  push:
+    branches: [main]
+    paths: ['app/**', '.github/workflows/android.yml']
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Uji & bangun aplikasi web
+        working-directory: app
+        run: |
+          npm ci
+          npm test
+          npm run build
+          npx cap sync android
+
+      - name: Bangun APK
+        working-directory: app/android
+        env:
+          KB_VERSION_CODE: ${{ github.run_number }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+          mv app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/kasir-buket-${{ github.run_number }}.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kasir-buket-apk
+          path: app/android/app/build/outputs/apk/debug/*.apk
+          retention-days: 30
+
+  server-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Uji server
+        working-directory: server
+        run: npm test

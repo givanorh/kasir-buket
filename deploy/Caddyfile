@@ -1,0 +1,8 @@
+# /etc/caddy/Caddyfile — HTTPS otomatis (Let's Encrypt). Ganti domain dengan milik Anda.
+kasir.domainanda.com {
+	encode gzip
+	reverse_proxy 127.0.0.1:8080 {
+		# SSE (pemberitahuan realtime) harus langsung diteruskan, tanpa ditahan buffer
+		flush_interval -1
+	}
+}

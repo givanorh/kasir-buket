@@ -1,0 +1,9 @@
+{
+  "name": "Kasir Buket",
+  "short_name": "Kasir Buket",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#fbf7f8",
+  "theme_color": "#b0315a",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
