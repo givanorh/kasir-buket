@@ -68,7 +68,13 @@ Buka `https://kasir.domainanda.com`, lakukan penyiapan toko (sekali saja).
 
 ### 4.1. Lewat GitHub Actions (tanpa memasang apa pun di PC)
 1. Buat akun GitHub, lalu repositori **private** baru, misalnya `kasir-buket`.
-2. Unggah seluruh isi folder proyek (kecuali `node_modules`, `app/dist`, `data`). Cara termudah: Add file › Upload files, seret semua folder.
+2. Kirim kode ke repositori itu. Upload lewat web GitHub dibatasi 100 berkas per unggahan, jadi pakai git (atau GitHub Desktop) dari berkas `kasir-buket.bundle`:
+   ```bash
+   git clone kasir-buket.bundle kasir-buket
+   cd kasir-buket
+   git remote set-url origin https://github.com/<akun-anda>/kasir-buket.git
+   git push -u origin main
+   ```
 3. Buka tab **Actions**. Workflow “Build APK Android” berjalan otomatis (sekitar 5–8 menit). Bila tidak, pilih workflow itu › Run workflow.
 4. Setelah selesai (centang hijau), buka run tersebut › bagian Artifacts › unduh `kasir-buket-apk` (zip berisi `kasir-buket-<nomor>.apk`).
 5. Kirim APK ke HP, buka, izinkan “Instal aplikasi tidak dikenal”.
