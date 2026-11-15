@@ -1,16 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { api, getSession, isNative, login, updateSession } from '../lib/session';
 import { Field, toast } from '../components/ui';
 
-/** Layar awal: alamat server (Android), penyiapan toko pertama kali, lalu masuk. */
+const confirmDiscard = (n: number) =>
+  window.confirm(`Server ini berbeda dari server sebelumnya. ${n} perubahan di perangkat ini belum terkirim ke server lama dan akan dihapus. Lanjutkan?`);
+
+/** Layar awal: alamat server (Android), penyiapan toko pertama kali, masuk, dan lupa kata sandi. */
 export default function Setup() {
   const s = getSession();
   const [server, setServer] = useState(s.serverUrl);
   const [health, setHealth] = useState<{ needsSetup: boolean } | null>(null);
   const [checking, setChecking] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [f, setF] = useState({ storeName: '', address: '', phone: '', ownerName: '', username: '', password: '', deviceName: isNative() ? 'HP Kasir' : 'Komputer Kasir' });
-  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
+  const [mode, setMode] = useState<'login' | 'lupa' | 'kode'>('login');
+  const [f, setF] = useState({
+    storeName: '', address: '', phone: '', ownerName: '', email: '', username: '', password: '',
+    deviceName: isNative() ? 'HP Kasir' : 'Komputer Kasir', code: '', newPassword: '', newPassword2: '',
+  });
+  const set = (k: keyof typeof f) => (e: ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
 
   async function check(url = server) {
     setChecking(true);
@@ -27,20 +34,30 @@ export default function Setup() {
   }
   useEffect(() => { if (server) check(server); }, []); // eslint-disable-line
 
-  async function doSetup(e: React.FormEvent) {
+  const run = (fn: () => Promise<void>) => async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
-    try {
-      await api('/api/setup', { body: f });
-      await login(f.username, f.password, f.deviceName);
-      toast('Toko siap digunakan');
-    } catch (err) { toast((err as Error).message, 'err'); } finally { setBusy(false); }
-  }
-  async function doLogin(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    try { await login(f.username, f.password, f.deviceName); } catch (err) { toast((err as Error).message, 'err'); } finally { setBusy(false); }
-  }
+    try { await fn(); } catch (err) { toast((err as Error).message, 'err'); } finally { setBusy(false); }
+  };
+
+  const doSetup = run(async () => {
+    await api('/api/setup', { body: f });
+    await login(f.username, f.password, f.deviceName, confirmDiscard);
+    toast('Toko siap digunakan');
+  });
+  const doLogin = run(async () => { await login(f.username, f.password, f.deviceName, confirmDiscard); });
+  const doForgot = run(async () => {
+    const r = await api<{ message: string; to?: string }>('/api/auth/forgot', { body: { username: f.username } });
+    toast(r.to ? `Kode dikirim ke ${r.to}` : r.message, 'info');
+    setMode('kode');
+  });
+  const doReset = run(async () => {
+    if (f.newPassword !== f.newPassword2) throw new Error('Konfirmasi kata sandi tidak sama');
+    await api('/api/auth/reset', { body: { username: f.username, code: f.code, password: f.newPassword } });
+    toast('Kata sandi diganti. Silakan masuk.');
+    setF({ ...f, password: '', code: '', newPassword: '', newPassword2: '' });
+    setMode('login');
+  });
 
   return (
     <div className="auth">
@@ -62,18 +79,40 @@ export default function Setup() {
             <Field label="Alamat toko"><input value={f.address} onChange={set('address')} /></Field>
             <Field label="No. telepon/WA toko"><input value={f.phone} onChange={set('phone')} inputMode="tel" /></Field>
             <Field label="Nama pemilik"><input required value={f.ownerName} onChange={set('ownerName')} /></Field>
-            <Field label="Username"><input required value={f.username} onChange={set('username')} autoCapitalize="none" /></Field>
-            <Field label="Kata sandi (min. 6)"><input required type="password" minLength={6} value={f.password} onChange={set('password')} /></Field>
+            <Field label="Email pemilik" hint="Untuk menerima kode bila lupa kata sandi"><input type="email" value={f.email} onChange={set('email')} autoCapitalize="none" /></Field>
+            <Field label="Username"><input required value={f.username} onChange={set('username')} autoCapitalize="none" autoComplete="off" /></Field>
+            <Field label="Kata sandi (min. 6)"><input required type="password" minLength={6} value={f.password} onChange={set('password')} autoComplete="new-password" /></Field>
             <Field label="Nama perangkat ini"><input value={f.deviceName} onChange={set('deviceName')} /></Field>
             <button className="btn primary big" disabled={busy}>{busy ? 'Menyiapkan…' : 'Siapkan toko'}</button>
           </form>
         )}
-        {health && !health.needsSetup && (
+        {health && !health.needsSetup && mode === 'login' && (
           <form onSubmit={doLogin} className="stack">
             <Field label="Username"><input required value={f.username} onChange={set('username')} autoCapitalize="none" autoComplete="username" /></Field>
             <Field label="Kata sandi"><input required type="password" value={f.password} onChange={set('password')} autoComplete="current-password" /></Field>
             <Field label="Nama perangkat ini" hint="Mis. HP Kasir, Tablet Ruang Rangkai"><input value={f.deviceName} onChange={set('deviceName')} /></Field>
             <button className="btn primary big" disabled={busy}>{busy ? 'Masuk…' : 'Masuk'}</button>
+            <button type="button" className="linkish center" onClick={() => setMode('lupa')} data-testid="lupa-sandi">Lupa kata sandi?</button>
+          </form>
+        )}
+        {health && !health.needsSetup && mode === 'lupa' && (
+          <form onSubmit={doForgot} className="stack">
+            <p className="muted">Masukkan username atau email akun. Kode 6 digit dikirim ke email yang terdaftar.</p>
+            <Field label="Username atau email"><input required value={f.username} onChange={set('username')} autoCapitalize="none" /></Field>
+            <button className="btn primary big" disabled={busy}>{busy ? 'Mengirim…' : 'Kirim kode'}</button>
+            <button type="button" className="linkish center" onClick={() => setMode('kode')}>Sudah punya kode</button>
+            <button type="button" className="linkish center" onClick={() => setMode('login')}>Kembali ke halaman masuk</button>
+          </form>
+        )}
+        {health && !health.needsSetup && mode === 'kode' && (
+          <form onSubmit={doReset} className="stack">
+            <p className="muted">Periksa email (termasuk folder Spam). Kode berlaku 15 menit.</p>
+            <Field label="Username atau email"><input required value={f.username} onChange={set('username')} autoCapitalize="none" /></Field>
+            <Field label="Kode 6 digit"><input required inputMode="numeric" maxLength={6} value={f.code} onChange={set('code')} autoComplete="one-time-code" /></Field>
+            <Field label="Kata sandi baru (min. 6)"><input required type="password" minLength={6} value={f.newPassword} onChange={set('newPassword')} autoComplete="new-password" /></Field>
+            <Field label="Ulangi kata sandi baru"><input required type="password" minLength={6} value={f.newPassword2} onChange={set('newPassword2')} autoComplete="new-password" /></Field>
+            <button className="btn primary big" disabled={busy}>{busy ? 'Menyimpan…' : 'Ganti kata sandi'}</button>
+            <button type="button" className="linkish center" onClick={() => setMode('lupa')}>Kirim ulang kode</button>
           </form>
         )}
       </div>

@@ -205,6 +205,57 @@ try {
   await A.getByTestId('sync-badge').filter({ hasText: 'Tersinkron' }).waitFor({ timeout: 10000 });
   await B.getByTestId('sync-badge').filter({ hasText: 'Tersinkron' }).waitFor({ timeout: 10000 });
   assert(true, 'kedua perangkat kembali berstatus "Tersinkron" (antrean 0)');
+  // ---------- lupa kata sandi lewat email (SMTP palsu di localhost) ----------
+  const net = await import('node:net');
+  const mails = [];
+  const smtp = net.createServer((sock) => {
+    let data = false, buf = '', msg = '', auth = -1;
+    const w = (x) => sock.write(x + '\r\n');
+    w('220 fake');
+    sock.on('data', (d) => {
+      buf += d.toString(); let i;
+      while ((i = buf.indexOf('\r\n')) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 2);
+        if (data) { if (line === '.') { data = false; mails.push(msg); w('250 ok'); } else msg += line + '\n'; continue; }
+        if (/^EHLO/.test(line)) sock.write('250-fake\r\n250 AUTH LOGIN\r\n');
+        else if (line === 'AUTH LOGIN') { auth = 0; w('334 u'); }
+        else if (auth >= 0 && auth < 2) { auth++; w(auth === 1 ? '334 p' : '235 ok'); }
+        else if (/^MAIL|^RCPT/.test(line)) w('250 ok');
+        else if (line === 'DATA') { data = true; msg = ''; w('354 go'); }
+        else if (line === 'QUIT') { w('221 bye'); sock.end(); }
+        else w('500 ?');
+      }
+    });
+  });
+  await new Promise((r) => smtp.listen(0, '127.0.0.1', r));
+  const ownerToken = await A.evaluate(async () => {
+    const req = indexedDB.open('kasir-buket');
+    const db = await new Promise((r) => { req.onsuccess = () => r(req.result); });
+    return await new Promise((r) => { const q = db.transaction('meta').objectStore('meta').get('token'); q.onsuccess = () => r(q.result.v); });
+  });
+  const call = (m, p, body) => fetch(BASE + p, { method: m, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` }, body: body && JSON.stringify(body) }).then((r) => r.json());
+  await call('POST', '/api/email-config', { host: '127.0.0.1', port: smtp.address().port, user: 'tokobuket@gmail.com', pass: 'abcd efgh ijkl mnop', fromName: 'Buket Stabat', from: 'tokobuket@gmail.com' });
+  const me = (await call('GET', '/api/users')).users.find((u) => u.username === 'vano');
+  await call('PATCH', `/api/users/${me.id}`, { email: 'vano@example.com' });
+  const ctxC = await browser.newContext({ ...devices['Pixel 7'] });
+  const C = await ctxC.newPage();
+  await C.goto(BASE);
+  await C.getByTestId('lupa-sandi').click();
+  await C.getByLabel('Username atau email').fill('vano');
+  await C.getByRole('button', { name: 'Kirim kode' }).click();
+  await C.getByLabel('Kode 6 digit').waitFor();
+  const body = Buffer.from(mails.at(-1).split('\n\n').slice(1).join('').replace(/\s/g, ''), 'base64').toString();
+  const code = body.match(/\b(\d{6})\b/)[1];
+  await C.getByLabel('Kode 6 digit').fill(code);
+  await C.getByLabel('Kata sandi baru (min. 6)').fill('sandiBaru9');
+  await C.getByLabel('Ulangi kata sandi baru').fill('sandiBaru9');
+  await C.getByRole('button', { name: 'Ganti kata sandi' }).click();
+  await C.getByLabel('Kata sandi', { exact: true }).fill('sandiBaru9');
+  await C.getByRole('button', { name: 'Masuk' }).click();
+  await C.getByTestId('sync-badge').waitFor({ timeout: 10000 });
+  await C.screenshot({ path: path.join(SHOTS, '6-login-setelah-reset.png') });
+  assert(true, `lupa kata sandi: kode ${code} dikirim via email, sandi diganti, login dengan sandi baru berhasil`);
+  smtp.close();
   console.log('\nSEMUA UJI E2E LULUS');
 } catch (e) {
   console.error(e);
@@ -213,4 +264,5 @@ try {
   await browser.close();
   srv.kill();
   fs.rmSync(dataDir, { recursive: true, force: true });
+  setTimeout(() => process.exit(process.exitCode || 0), 500);
 }

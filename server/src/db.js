@@ -42,7 +42,16 @@ export function openDb(dataDir) {
       last_seen TEXT
     );
     CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
+    CREATE TABLE IF NOT EXISTS reset_codes (
+      user_id TEXT PRIMARY KEY,
+      code_hash TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0
+    );
   `);
+  // migrasi: kolom email pengguna (untuk reset kata sandi lewat email)
+  const userCols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+  if (!userCols.includes('email')) db.exec('ALTER TABLE users ADD COLUMN email TEXT');
 
   const kvGet = db.prepare('SELECT v FROM kv WHERE k = ?');
   const kvSet = db.prepare('INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v');
@@ -52,11 +61,19 @@ export function openDb(dataDir) {
     kvSet.run('secret', secret);
   }
 
+  // ID unik server: berubah hanya bila basis data baru dibuat. Klien memakainya untuk mendeteksi pergantian server.
+  let instanceId = kvGet.get('instance_id')?.v;
+  if (!instanceId) {
+    instanceId = crypto.randomBytes(8).toString('hex');
+    kvSet.run('instance_id', instanceId);
+  }
+
   const maxSeq = db.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM records').get().m;
 
   return {
     db,
     secret: process.env.SECRET || secret,
+    instanceId,
     state: { seq: Number(maxSeq) },
     kvGet: (k) => kvGet.get(k)?.v ?? null,
     kvSet: (k, v) => kvSet.run(k, String(v)),

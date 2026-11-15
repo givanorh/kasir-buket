@@ -220,3 +220,4 @@ button.trow:hover { background: #fdf6f8 }
   .modal-bg { padding: 0; align-items: end }
   .modal { border-radius: 16px 16px 0 0; max-height: 94vh }
 }
+.linkish.center { text-align: center; color: var(--rose); font-weight: 600; padding: 6px; cursor: pointer }

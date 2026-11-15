@@ -8,7 +8,7 @@
 // sehingga edit offline tidak tertimpa. Penggabungan per kolom (patch), bukan per rekaman.
 import { useSyncExternalStore } from 'react';
 import { db, getMeta, setMeta } from './db';
-import { api, ApiError, getSession, logout } from './session';
+import { api, ApiError, getSession, logout, updateSession } from './session';
 import { COLLECTIONS } from './types';
 
 export interface SyncStatus {
@@ -134,9 +134,20 @@ class SyncEngine {
   private async pull() {
     let cursor = await getMeta<number>('cursor', 0);
     for (;;) {
-      const res = await api<{ changes: { c: string; id: string; seq: number; del: boolean; data: any }[]; cursor: number; more: boolean }>(
+      const res = await api<{ changes: { c: string; id: string; seq: number; del: boolean; data: any }[]; cursor: number; more: boolean; head?: number; instanceId?: string }>(
         `/api/sync/pull?since=${cursor}&limit=${PULL_LIMIT}`, { timeout: 60000 },
       );
+      // basis data server dipulihkan dari cadangan lama (nomor urut mundur): tarik ulang dari awal
+      if (typeof res.head === 'number' && res.head < cursor) {
+        cursor = 0;
+        await setMeta('cursor', 0);
+        continue;
+      }
+      // migrasi satu kali untuk perangkat versi lama (belum mengenal ID server): catat ID, lalu tarik ulang penuh
+      if (res.instanceId && !getSession().serverInstance) {
+        await updateSession({ serverInstance: res.instanceId });
+        if (cursor > 0) { cursor = 0; await setMeta('cursor', 0); continue; }
+      }
       if (res.changes.length) {
         const tables = [db.outbox, db.meta, ...COLLECTIONS.map((c) => db.table(c))];
         await db.transaction('rw', tables, async () => {

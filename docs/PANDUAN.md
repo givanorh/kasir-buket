@@ -136,7 +136,19 @@ Catatan: Chrome mungkin meminta Anda mengetik “allow pasting” sebelum bisa m
 
 Sinkron berjalan sendiri. Lencana di kanan atas: hijau “Tersinkron”, kuning “Menyinkron · n” (n perubahan sedang dikirim), merah “Offline · n menunggu” (tersimpan aman di perangkat, terkirim otomatis saat internet kembali).
 
-## 8. Keamanan
+## 8. Lupa Kata Sandi
+1. **Lewat email (disarankan).** Owner mengatur sekali: Pengaturan › Email › isi Gmail toko dan *app password* (Akun Google › Keamanan › Verifikasi 2 Langkah aktif › myaccount.google.com/apppasswords) › Simpan › Kirim email uji. Lalu isi email tiap pengguna di Pengaturan › Pengguna. Di halaman masuk, ketuk **Lupa kata sandi?**, masukkan username atau email, masukkan kode 6 digit dari email (berlaku 15 menit), lalu buat sandi baru.
+2. **Staf lupa sandi**: owner cukup menekan tombol **Sandi** di Pengaturan › Pengguna.
+3. **Darurat (owner lupa, email belum diatur)**: di komputer server, dalam folder proyek:
+   ```bash
+   node server/src/reset-password.js                      # daftar pengguna & jumlah transaksi
+   node server/src/reset-password.js <username> '<sandi-baru>'
+   ```
+
+## 9. Pindah Server atau Basis Data
+Setiap basis data punya ID unik. Bila perangkat masuk ke server dengan ID berbeda (misalnya pindah dari PC ke VPS dengan basis data baru), data lokal di perangkat dikosongkan lalu ditarik ulang dari server baru, supaya data dua server tidak tercampur. Bila ada perubahan yang belum terkirim, aplikasi meminta konfirmasi dulu. Untuk memindahkan data lama ke server baru, salin berkas `data/kasir.db` dan `data/kasir.db-wal` saat server **mati**.
+
+## 10. Keamanan
 1. Gunakan HTTPS untuk server publik. HTTP hanya untuk uji di jaringan lokal.
 2. Satu akun per orang; nonaktifkan akun karyawan yang keluar (Pengaturan › Pengguna).
 3. Token login berlaku 180 hari per perangkat. Kehilangan HP: nonaktifkan akun, lalu aktifkan lagi dengan kata sandi baru.

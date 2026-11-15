@@ -1,6 +1,7 @@
 // Basis data lokal (IndexedDB via Dexie). Aplikasi selalu membaca/menulis ke sini dulu (offline-first),
 // lalu mesin sinkron mengirim/menarik perubahan ke server di latar belakang.
 import Dexie, { type Table } from 'dexie';
+import { COLLECTIONS } from './types';
 import type {
   CashMove, Category, Customer, Device, Order, Outlet, Payment, PrintJob, Product, Settings, Shift, Staff, StockMove,
 } from './types';
@@ -48,6 +49,15 @@ export class KasirDB extends Dexie {
 }
 
 export const db = new KasirDB();
+
+/** Kosongkan semua data bisnis lokal (dipakai saat perangkat pindah ke server/basis data lain). */
+export async function resetLocalData() {
+  await db.transaction('rw', [db.outbox, db.meta, ...COLLECTIONS.map((c) => db.table(c))], async () => {
+    for (const c of COLLECTIONS) await db.table(c).clear();
+    await db.outbox.clear();
+    await db.meta.bulkDelete(['cursor', 'sync_errors']);
+  });
+}
 
 export async function getMeta<T>(k: string, fallback: T): Promise<T> {
   const r = await db.meta.get(k);

@@ -11,9 +11,10 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { openDb, backup } from './db.js';
 import { hashPassword, verifyPassword, signToken, verifyToken, createLimiter } from './auth.js';
+import { sendMail } from './smtp.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const VERSION = '1.0.0';
+export const VERSION = '1.1.0';
 
 const ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
 const ROLES = ['owner', 'kasir', 'perangkai'];
@@ -44,6 +45,8 @@ export function createServer(opts = {}) {
   const store = opts.store || openDb(dataDir);
   const { db } = store;
   const limiter = createLimiter();
+  const forgotLimiter = createLimiter(3, 15 * 60 * 1000);
+  const sendMailFn = opts.sendMail || sendMail;
   const sseClients = new Set();
 
   const q = {
@@ -55,8 +58,13 @@ export function createServer(opts = {}) {
     countUsers: db.prepare('SELECT COUNT(*) AS n FROM users'),
     userByName: db.prepare('SELECT * FROM users WHERE username = ?'),
     userById: db.prepare('SELECT * FROM users WHERE id = ?'),
-    listUsers: db.prepare('SELECT id, username, name, role, active, outlet_id, created_at FROM users ORDER BY created_at'),
-    insertUser: db.prepare('INSERT INTO users (id, username, name, role, pass, active, outlet_id, created_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)'),
+    listUsers: db.prepare('SELECT id, username, name, email, role, active, outlet_id, created_at FROM users ORDER BY created_at'),
+    insertUser: db.prepare('INSERT INTO users (id, username, name, role, pass, active, outlet_id, created_at, email) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)'),
+    userByEmail: db.prepare('SELECT * FROM users WHERE lower(email) = lower(?)'),
+    getCode: db.prepare('SELECT * FROM reset_codes WHERE user_id = ?'),
+    putCode: db.prepare('INSERT INTO reset_codes (user_id, code_hash, expires_at, attempts) VALUES (?, ?, ?, 0) ON CONFLICT(user_id) DO UPDATE SET code_hash = excluded.code_hash, expires_at = excluded.expires_at, attempts = 0'),
+    bumpCode: db.prepare('UPDATE reset_codes SET attempts = attempts + 1 WHERE user_id = ?'),
+    delCode: db.prepare('DELETE FROM reset_codes WHERE user_id = ?'),
     deviceById: db.prepare('SELECT * FROM devices WHERE id = ?'),
     deviceCodes: db.prepare('SELECT code FROM devices'),
     insertDevice: db.prepare('INSERT INTO devices (id, code, name, user_id, outlet_id, created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)'),
@@ -135,10 +143,108 @@ export function createServer(opts = {}) {
     return { ...u, deviceId: p.d };
   }
 
+  function normEmail(e) {
+    const v = String(e || '').trim().toLowerCase();
+    if (!v) return null;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw new HttpError(400, 'Format email tidak valid');
+    return v;
+  }
+  const maskEmail = (e) => e.replace(/^(.{1,2})[^@]*(@.*)$/, '$1***$2');
+
+  // ---------- konfigurasi email (SMTP), disimpan di server saja, tidak ikut sinkron ----------
+  function emailConfig() {
+    try { return JSON.parse(store.kvGet('smtp') || 'null'); } catch { return null; }
+  }
+  function publicEmailConfig() {
+    const c = emailConfig();
+    return c ? { host: c.host, port: c.port, user: c.user, from: c.from, fromName: c.fromName, hasPassword: !!c.pass, configured: !!(c.host && c.from) } : { configured: false };
+  }
+  function storeName() {
+    const r = q.getRec.get('settings', 'toko');
+    return r ? JSON.parse(r.data).store_name || 'Kasir Buket' : 'Kasir Buket';
+  }
+
+  async function handleForgot(body, req) {
+    const ident = String(body.username || '').trim().toLowerCase();
+    if (!ident) throw new HttpError(400, 'Isi username atau email');
+    const cfg = emailConfig();
+    if (!cfg?.host) throw new HttpError(503, 'Reset lewat email belum diaktifkan. Minta owner mengatur email di Pengaturan › Email, atau pakai skrip reset-password di komputer server.');
+    const key = `${req.socket.remoteAddress}|${ident}`;
+    if (forgotLimiter.blocked(key)) throw new HttpError(429, 'Terlalu sering meminta kode. Coba lagi 15 menit lagi.');
+    forgotLimiter.fail(key);
+    const u = ident.includes('@') ? q.userByEmail.get(ident) : q.userByName.get(ident);
+    const generic = { ok: true, message: 'Jika akun terdaftar dan punya email, kode 6 digit sudah dikirim. Periksa juga folder Spam.' };
+    if (!u || !u.active || !u.email) return generic;
+    const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+    q.putCode.run(u.id, crypto.createHash('sha256').update(code).digest('hex'), Date.now() + 15 * 60 * 1000);
+    try {
+      await sendMailFn(cfg, {
+        to: u.email,
+        subject: `Kode reset kata sandi ${storeName()}: ${code}`,
+        text: `Halo ${u.name},\n\nKode untuk mengganti kata sandi akun "${u.username}" di ${storeName()}:\n\n    ${code}\n\nKode berlaku 15 menit. Jika Anda tidak meminta reset, abaikan email ini; kata sandi lama tetap berlaku.\n`,
+      });
+    } catch (e) {
+      q.delCode.run(u.id);
+      console.error('Kirim email reset gagal:', e.message);
+      throw new HttpError(502, 'Email gagal dikirim. Owner perlu memeriksa Pengaturan › Email.');
+    }
+    return { ...generic, to: maskEmail(u.email) };
+  }
+
+  function handleReset(body) {
+    const ident = String(body.username || '').trim().toLowerCase();
+    const code = String(body.code || '').replace(/\D/g, '');
+    const pw = String(body.password || '');
+    if (pw.length < 6) throw new HttpError(400, 'Kata sandi baru minimal 6 karakter');
+    const u = ident.includes('@') ? q.userByEmail.get(ident) : q.userByName.get(ident);
+    const rec = u && q.getCode.get(u.id);
+    const bad = new HttpError(400, 'Kode salah atau kedaluwarsa. Minta kode baru.');
+    if (!rec || rec.expires_at < Date.now() || rec.attempts >= 5) { if (rec) q.delCode.run(u.id); throw bad; }
+    const hash = crypto.createHash('sha256').update(code).digest('hex');
+    if (!crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(rec.code_hash))) { q.bumpCode.run(u.id); throw bad; }
+    store.tx(() => {
+      db.prepare('UPDATE users SET pass = ?, active = 1 WHERE id = ?').run(hashPassword(pw), u.id);
+      q.delCode.run(u.id);
+    });
+    return { ok: true, username: u.username };
+  }
+
+  async function handleEmailConfig(user, method, parts, body) {
+    if (user.role !== 'owner') throw new HttpError(403, 'Khusus owner');
+    if (method === 'GET') return publicEmailConfig();
+    if (method === 'POST' && parts[2] === 'test') {
+      const cfg = emailConfig();
+      if (!cfg?.host) throw new HttpError(400, 'Simpan pengaturan email dulu');
+      const to = normEmail(body.to) || q.userById.get(user.id).email;
+      if (!to) throw new HttpError(400, 'Isi email tujuan uji atau email akun owner');
+      try {
+        await sendMailFn(cfg, { to, subject: `Uji email ${storeName()}`, text: 'Pengaturan email Kasir Buket berhasil. Reset kata sandi lewat email sudah aktif.\n' });
+      } catch (e) { throw new HttpError(502, `Gagal: ${e.message}`); }
+      return { ok: true, to };
+    }
+    if (method === 'POST' || method === 'PATCH') {
+      const cur = emailConfig() || {};
+      const host = String(body.host ?? cur.host ?? '').trim();
+      const next = {
+        host,
+        port: Number(body.port ?? cur.port ?? 465),
+        user: String(body.user ?? cur.user ?? '').trim(),
+        pass: body.pass ? String(body.pass).replace(/\s+/g, '') : cur.pass || '',
+        from: normEmail(body.from ?? cur.from ?? body.user ?? '') || '',
+        fromName: String(body.fromName ?? cur.fromName ?? storeName()).trim(),
+      };
+      if (!host) { store.kvSet('smtp', 'null'); return { configured: false }; }
+      if (!next.from) throw new HttpError(400, 'Isi email pengirim');
+      store.kvSet('smtp', JSON.stringify(next));
+      return publicEmailConfig();
+    }
+    throw new HttpError(405, 'Metode tidak didukung');
+  }
+
   // ---------- handler ----------
   function handleSetup(body) {
     if (q.countUsers.get().n > 0) throw new HttpError(409, 'Server sudah disiapkan');
-    const { storeName, address = '', phone = '', ownerName, username, password } = body;
+    const { storeName, address = '', phone = '', ownerName, username, password, email = '' } = body;
     if (!storeName || !ownerName || !username || !password) throw new HttpError(400, 'Nama toko, nama pemilik, username, dan kata sandi wajib diisi');
     if (String(password).length < 6) throw new HttpError(400, 'Kata sandi minimal 6 karakter');
     const uname = String(username).trim().toLowerCase();
@@ -165,7 +271,7 @@ export function createServer(opts = {}) {
       const cats = ['Buket Bunga', 'Buket Uang', 'Buket Snack', 'Buket Wisuda', 'Bunga Papan', 'Add-on', 'Jasa'];
       cats.forEach((name, i) => writeRecord('categories', `cat-${i + 1}`, { name, sort: i + 1 }, null));
       const id = newId();
-      q.insertUser.run(id, uname, ownerName, 'owner', hashPassword(password), outletId, now());
+      q.insertUser.run(id, uname, ownerName, 'owner', hashPassword(password), outletId, now(), normEmail(email));
       mirrorUser(q.userById.get(id));
     });
     broadcast();
@@ -197,6 +303,7 @@ export function createServer(opts = {}) {
     const token = signToken(store.secret, { u: u.id, d: deviceId, r: u.role }, tokenDays);
     return {
       token,
+      instanceId: store.instanceId,
       user: { id: u.id, name: u.name, username: u.username, role: u.role, outlet_id: u.outlet_id },
       device: { id: dev.id, code: dev.code, name: dev.name, outlet_id: dev.outlet_id },
     };
@@ -208,7 +315,7 @@ export function createServer(opts = {}) {
     const rows = q.pull.all(since, limit);
     const changes = rows.map((r) => ({ c: r.c, id: r.id, seq: r.seq, del: !!r.del, data: JSON.parse(r.data) }));
     const cursor = changes.length ? changes[changes.length - 1].seq : since;
-    return { changes, cursor, more: rows.length === limit, head: store.state.seq, serverTime: now() };
+    return { changes, cursor, more: rows.length === limit, head: store.state.seq, instanceId: store.instanceId, serverTime: now() };
   }
 
   function handlePush(user, body) {
@@ -246,7 +353,7 @@ export function createServer(opts = {}) {
     if (user.role !== 'owner') throw new HttpError(403, 'Khusus owner');
     if (method === 'GET') return { users: q.listUsers.all() };
     if (method === 'POST') {
-      const { name, username, password, role = 'kasir', outlet_id } = body;
+      const { name, username, password, role = 'kasir', outlet_id, email = '' } = body;
       if (!name || !username || !password) throw new HttpError(400, 'Nama, username, dan kata sandi wajib diisi');
       if (!ROLES.includes(role)) throw new HttpError(400, 'Peran tidak dikenal');
       if (String(password).length < 6) throw new HttpError(400, 'Kata sandi minimal 6 karakter');
@@ -255,7 +362,7 @@ export function createServer(opts = {}) {
       if (q.userByName.get(uname)) throw new HttpError(409, 'Username sudah dipakai');
       const id = newId();
       store.tx(() => {
-        q.insertUser.run(id, uname, name, role, hashPassword(password), outlet_id || 'outlet-utama', now());
+        q.insertUser.run(id, uname, name, role, hashPassword(password), outlet_id || 'outlet-utama', now(), normEmail(email));
         mirrorUser(q.userById.get(id));
       });
       broadcast();
@@ -281,6 +388,7 @@ export function createServer(opts = {}) {
         sets.push('pass = ?'); vals.push(hashPassword(body.password));
       }
       if (body.outlet_id) { sets.push('outlet_id = ?'); vals.push(String(body.outlet_id)); }
+      if (typeof body.email === 'string') { sets.push('email = ?'); vals.push(normEmail(body.email)); }
       if (!sets.length) return { ok: true };
       store.tx(() => {
         db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...vals, target.id);
@@ -327,9 +435,11 @@ export function createServer(opts = {}) {
     const parts = url.pathname.split('/').filter(Boolean); // ['api', ...]
     try {
       const route = `${req.method} /${parts.slice(0, 3).join('/')}`;
-      if (route === 'GET /api/health') return send(res, 200, { ok: true, version: VERSION, needsSetup: q.countUsers.get().n === 0, serverTime: now() });
+      if (route === 'GET /api/health') return send(res, 200, { ok: true, version: VERSION, instanceId: store.instanceId, needsSetup: q.countUsers.get().n === 0, serverTime: now() });
       if (route === 'POST /api/setup') return send(res, 200, handleSetup(await readJson(req)));
       if (route === 'POST /api/auth/login') return send(res, 200, handleLogin(await readJson(req), req));
+      if (route === 'POST /api/auth/forgot') return send(res, 200, await handleForgot(await readJson(req), req));
+      if (route === 'POST /api/auth/reset') return send(res, 200, handleReset(await readJson(req)));
       const user = authUser(req, url);
       if (route === 'GET /api/auth/me') return send(res, 200, { user: { id: user.id, name: user.name, username: user.username, role: user.role, outlet_id: user.outlet_id }, device: q.deviceById.get(user.deviceId) || null });
       if (route === 'GET /api/sync/pull') return send(res, 200, handlePull(url));
@@ -341,6 +451,7 @@ export function createServer(opts = {}) {
         req.on('close', () => sseClients.delete(res));
         return;
       }
+      if (parts[1] === 'email-config') return send(res, 200, await handleEmailConfig(user, req.method, parts, req.method === 'GET' ? {} : await readJson(req)));
       if (parts[1] === 'users') return send(res, 200, handleUsers(user, req.method, parts, req.method === 'GET' ? {} : await readJson(req)));
       throw new HttpError(404, 'Endpoint tidak ditemukan');
     } catch (e) {

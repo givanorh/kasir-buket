@@ -14,11 +14,11 @@ import { fmtShort } from '../lib/format';
 export default function Pengaturan() {
   const s = useSession();
   const owner = s.user?.role === 'owner';
-  const [tab, setTab] = useState<'perangkat' | 'printer' | 'toko' | 'pengguna' | 'impor'>('perangkat');
+  const [tab, setTab] = useState<'perangkat' | 'printer' | 'toko' | 'pengguna' | 'email' | 'impor'>('perangkat');
   const tabs = [
     { value: 'perangkat' as const, label: 'Perangkat' },
     { value: 'printer' as const, label: 'Printer' },
-    ...(owner ? [{ value: 'toko' as const, label: 'Toko' }, { value: 'pengguna' as const, label: 'Pengguna' }, { value: 'impor' as const, label: 'Impor Kasir Pintar' }] : []),
+    ...(owner ? [{ value: 'toko' as const, label: 'Toko' }, { value: 'pengguna' as const, label: 'Pengguna' }, { value: 'email' as const, label: 'Email' }, { value: 'impor' as const, label: 'Impor Kasir Pintar' }] : []),
   ];
   return (
     <div className="page">
@@ -27,6 +27,7 @@ export default function Pengaturan() {
       {tab === 'printer' && <PrinterTab />}
       {tab === 'toko' && owner && <StoreTab />}
       {tab === 'pengguna' && owner && <UsersTab />}
+      {tab === 'email' && owner && <EmailTab />}
       {tab === 'impor' && owner && <ImportTab />}
     </div>
   );
@@ -189,14 +190,14 @@ function StoreTab() {
   );
 }
 
-interface UserRow { id: string; username: string; name: string; role: Role; active: number }
+interface UserRow { id: string; username: string; name: string; email?: string | null; role: Role; active: number }
 function UsersTab() {
   const [users, setUsers] = useState<UserRow[]>([]);
-  const [f, setF] = useState({ name: '', username: '', password: '', role: 'kasir' as Role });
+  const [f, setF] = useState({ name: '', username: '', password: '', email: '', role: 'kasir' as Role });
   const load = () => api<{ users: UserRow[] }>('/api/users').then((r) => setUsers(r.users)).catch((e) => toast(e.message, 'err'));
   useEffect(() => { load(); }, []);
   async function add() {
-    try { await api('/api/users', { body: f }); toast('Pengguna dibuat'); setF({ name: '', username: '', password: '', role: 'kasir' }); load(); } catch (e) { toast((e as Error).message, 'err'); }
+    try { await api('/api/users', { body: f }); toast('Pengguna dibuat'); setF({ name: '', username: '', password: '', email: '', role: 'kasir' }); load(); } catch (e) { toast((e as Error).message, 'err'); }
   }
   async function patch(id: string, body: object) {
     try { await api(`/api/users/${id}`, { method: 'PATCH', body }); load(); toast('Disimpan'); } catch (e) { toast((e as Error).message, 'err'); }
@@ -207,7 +208,8 @@ function UsersTab() {
         <h3>Pengguna</h3>
         {users.map((u) => (
           <div key={u.id} className="row">
-            <span><b>{u.name}</b> <span className="muted">@{u.username}</span></span>
+            <span><b>{u.name}</b> <span className="muted">@{u.username}{u.email ? ` · ${u.email}` : ' · tanpa email'}</span></span>
+            <button className="btn small" onClick={() => { const em = prompt(`Email untuk ${u.name} (kosongkan untuk menghapus)`, u.email || ''); if (em !== null) patch(u.id, { email: em }); }}>Email</button>
             <select value={u.role} onChange={(e) => patch(u.id, { role: e.target.value })}><option value="owner">owner</option><option value="kasir">kasir</option><option value="perangkai">perangkai</option></select>
             <button className="btn small" onClick={() => { const pw = prompt(`Kata sandi baru untuk ${u.name} (min. 6)`); if (pw) patch(u.id, { password: pw }); }}>Sandi</button>
             <button className={`btn small ${u.active ? '' : 'primary'}`} onClick={() => patch(u.id, { active: !u.active })}>{u.active ? 'Nonaktifkan' : 'Aktifkan'}</button>
@@ -219,6 +221,7 @@ function UsersTab() {
         <h3>Tambah pengguna</h3>
         <Field label="Nama"><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
         <Field label="Username"><input value={f.username} onChange={(e) => setF({ ...f, username: e.target.value.toLowerCase() })} autoCapitalize="none" /></Field>
+        <Field label="Email (untuk reset kata sandi)"><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} autoCapitalize="none" /></Field>
         <Field label="Kata sandi (min. 6)"><input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></Field>
         <Field group label="Peran"><Seg value={f.role} onChange={(role) => setF({ ...f, role })} options={[{ value: 'kasir', label: 'Kasir' }, { value: 'perangkai', label: 'Perangkai' }, { value: 'owner', label: 'Owner' }]} /></Field>
         <button className="btn primary" disabled={!f.name || !f.username || f.password.length < 6} onClick={add}>Tambah</button>
@@ -266,3 +269,59 @@ function ImportTab() {
   );
 }
 
+
+interface EmailCfg { host?: string; port?: number; user?: string; from?: string; fromName?: string; hasPassword?: boolean; configured: boolean }
+function EmailTab() {
+  const [cfg, setCfg] = useState<EmailCfg | null>(null);
+  const [f, setF] = useState({ host: 'smtp.gmail.com', port: 465, user: '', pass: '', fromName: '' });
+  const [testTo, setTestTo] = useState('');
+  const [busy, setBusy] = useState(false);
+  const load = () => api<EmailCfg>('/api/email-config').then((c) => {
+    setCfg(c);
+    if (c.configured) setF({ host: c.host || '', port: c.port || 465, user: c.user || '', pass: '', fromName: c.fromName || '' });
+  }).catch((e) => toast(e.message, 'err'));
+  useEffect(() => { load(); }, []);
+  async function saveCfg() {
+    setBusy(true);
+    try { setCfg(await api<EmailCfg>('/api/email-config', { body: { ...f, from: f.user } })); setF({ ...f, pass: '' }); toast('Pengaturan email disimpan'); }
+    catch (e) { toast((e as Error).message, 'err'); } finally { setBusy(false); }
+  }
+  async function test() {
+    setBusy(true);
+    try { const r = await api<{ to: string }>('/api/email-config/test', { body: { to: testTo }, timeout: 40000 }); toast(`Email uji terkirim ke ${r.to}`); }
+    catch (e) { toast((e as Error).message, 'err'); } finally { setBusy(false); }
+  }
+  if (!cfg) return null;
+  return (
+    <div className="two">
+      <section className="card">
+        <h3>Email pengirim (untuk kode reset kata sandi)</h3>
+        <div className="row"><span>Status</span><b className={cfg.configured ? 'ok' : 'red'}>{cfg.configured ? 'Aktif' : 'Belum diatur'}</b></div>
+        <Field label="Alamat Gmail pengirim"><input type="email" value={f.user} onChange={(e) => setF({ ...f, user: e.target.value.trim() })} autoCapitalize="none" placeholder="tokoanda@gmail.com" /></Field>
+        <Field label="App password Gmail (16 huruf)" hint={cfg.hasPassword ? 'Sudah tersimpan. Kosongkan bila tidak diganti.' : undefined}>
+          <input type="password" value={f.pass} onChange={(e) => setF({ ...f, pass: e.target.value })} autoComplete="new-password" placeholder="xxxx xxxx xxxx xxxx" />
+        </Field>
+        <Field label="Nama pengirim"><input value={f.fromName} onChange={(e) => setF({ ...f, fromName: e.target.value })} placeholder="Buket Stabat" /></Field>
+        <div className="cols">
+          <Field label="Server SMTP"><input value={f.host} onChange={(e) => setF({ ...f, host: e.target.value.trim() })} /></Field>
+          <Field label="Port"><input type="number" value={f.port} onChange={(e) => setF({ ...f, port: Number(e.target.value) })} /></Field>
+        </div>
+        <button className="btn primary" disabled={busy || !f.user || !f.host || (!f.pass && !cfg.hasPassword)} onClick={saveCfg}>Simpan</button>
+        <h3>Kirim email uji</h3>
+        <Field label="Kirim ke" hint="Kosongkan untuk mengirim ke email akun owner"><input type="email" value={testTo} onChange={(e) => setTestTo(e.target.value)} autoCapitalize="none" /></Field>
+        <button className="btn" disabled={busy || !cfg.configured} onClick={test}>{busy ? 'Memproses…' : 'Kirim email uji'}</button>
+      </section>
+      <section className="card">
+        <h3>Cara membuat App password Gmail</h3>
+        <ol className="small">
+          <li>Pakai akun Gmail khusus toko bila ada.</li>
+          <li>Aktifkan <b>Verifikasi 2 Langkah</b> di Akun Google › Keamanan.</li>
+          <li>Buka <b>myaccount.google.com/apppasswords</b>, buat app password bernama “Kasir Buket”.</li>
+          <li>Salin 16 huruf yang muncul ke kolom App password di samping, lalu Simpan dan Kirim email uji.</li>
+        </ol>
+        <p className="muted small">App password hanya tersimpan di server dan tidak pernah dikirim ke HP atau browser. Setiap pengguna perlu punya email di Pengaturan › Pengguna agar bisa memakai “Lupa kata sandi?”.</p>
+        <p className="muted small">Server harus terhubung ke internet agar email terkirim. Bila Gmail menolak, cabut app password lama lalu buat yang baru.</p>
+      </section>
+    </div>
+  );
+}

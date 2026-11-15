@@ -24,7 +24,7 @@ node e2e/e2e.mjs
 Selalu jalankan `server: npm test`, `app: npm test && npm run build`, dan `node e2e/e2e.mjs` sebelum menyatakan pekerjaan selesai.
 
 ## Struktur
-- `server/src/index.js` — HTTP API, sinkron push/pull, SSE `/api/events`, pengguna, file statis. `db.js` (skema SQLite, backup `VACUUM INTO`), `auth.js` (scrypt, token HMAC, limiter).
+- `server/src/index.js` — HTTP API, sinkron push/pull, SSE `/api/events`, pengguna, lupa kata sandi (`/api/auth/forgot`, `/api/auth/reset`), konfigurasi SMTP (`/api/email-config`, owner), file statis. `db.js` (skema SQLite, migrasi kolom, `instance_id`, backup `VACUUM INTO`), `auth.js` (scrypt, token HMAC, limiter), `smtp.js` (klien SMTP tanpa dependensi: TLS 465 / STARTTLS), `reset-password.js` (CLI pemulihan sandi di komputer server).
 - `app/src/lib/` — `types.ts` (model data), `db.ts` (Dexie/IndexedDB), `sync.ts` (mesin sinkron), `store.ts` (operasi domain: checkout, pembayaran, void, nomor transaksi, konfigurasi perangkat), `calc.ts` (rumus murni: total, laporan, shift, kapasitas), `kasirpintar.ts` (impor), `print/` (`escpos.ts` encoder, `receipts.ts` isi struk/tiket, `index.ts` transport + stasiun cetak).
 - `app/src/pages/` — Kasir, Pesanan, Produksi, Produk, Pelanggan, Shift, Laporan, Pengaturan, Setup.
 - `app/android/app/src/main/java/id/kasirbuket/app/ThermalPrinterPlugin.java` — plugin native: `listPaired`, `printBluetooth` (SPP), `printTcp` (port 9100).
@@ -39,9 +39,11 @@ Selalu jalankan `server: npm test`, `app: npm test && npm run build`, dan `node 
 5. **Uang = bilangan bulat Rupiah.** `total = Σ(qty×harga) − Σ potongan − diskon + ongkir`, diskon dibatasi agar total ≥ 0.
 6. **Pembayaran append-only** (`payments`), stok sebagai mutasi (`stock_moves`), bukan angka tunggal.
 7. **Nomor transaksi** `YYMMDD-<kode perangkat><urut3>`; kode perangkat dari server saat login.
-8. **ID rekaman** cocok `/^[A-Za-z0-9_-]{4,64}$/`. Impor Kasir Pintar memakai ID deterministik (`kp-`, `kpo-`, `kpp-`) agar impor ulang idempoten.
-9. **Teks cetak ASCII saja** (`toAscii`), 58 mm = 32 kolom, 80 mm = 48 kolom. Tiket produksi tidak boleh memuat harga.
-10. Server tetap **tanpa dependensi npm**.
+8. **ID server (`instance_id`)** dikirim di health/login/pull. Klien menyimpannya; bila berbeda saat login, data lokal dikosongkan (konfirmasi bila outbox berisi). Bila `head < cursor` (server dipulihkan dari cadangan), klien menarik ulang dari 0.
+9. **Reset sandi via email**: kode 6 digit, hash SHA-256, berlaku 15 menit, maks. 5 percobaan, sekali pakai; respons generik untuk akun tak dikenal; kredensial SMTP hanya di tabel `kv` server, tidak pernah dikirim ke klien; email pengguna tidak ikut koleksi `staff`.
+10. **ID rekaman** cocok `/^[A-Za-z0-9_-]{4,64}$/`. Impor Kasir Pintar memakai ID deterministik (`kp-`, `kpo-`, `kpp-`) agar impor ulang idempoten.
+11. **Teks cetak ASCII saja** (`toAscii`), 58 mm = 32 kolom, 80 mm = 48 kolom. Tiket produksi tidak boleh memuat harga.
+12. Server tetap **tanpa dependensi npm**. Folder `data/` (basis data) wajib tetap di `.gitignore`.
 
 ## Batasan lingkungan
 - Android SDK/Gradle tidak tersedia di container (dl.google.com, maven.google.com diblokir). APK dibangun oleh GitHub Actions atau Android Studio di PC pengguna. Perubahan Java cukup dicek dengan `javac` terhadap stub API.

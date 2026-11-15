@@ -4,3 +4,4 @@ server/data/
 e2e/shots/
 *.log
 .DS_Store
+data/
