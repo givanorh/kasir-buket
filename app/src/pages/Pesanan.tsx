@@ -50,7 +50,7 @@ export default function Pesanan() {
         <Seg value={filter} onChange={setFilter} options={[{ value: 'hari', label: 'Hari ini' }, { value: 'jadwal', label: 'Jadwal' }, { value: 'piutang', label: 'Belum lunas' }, { value: '30', label: '30 hari' }]} />
         <input className="grow" placeholder="Cari no / nama / HP" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-      <div className="table">
+      <div className="table" style={{ ['--cols' as string]: '150px minmax(0,1fr) 170px 150px 110px 44px', ['--cols-sm' as string]: 'minmax(96px,auto) minmax(0,1fr) auto 40px' }}>
         {list.map((o) => {
           const pd = paid.get(o.id) || 0;
           return (

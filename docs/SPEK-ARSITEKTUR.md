@@ -141,6 +141,22 @@ Penghapusan memakai penanda `deleted`/`void` agar perangkat lain ikut mengetahui
 3. Endpoint: `GET /api/health`, `POST /api/setup`, `POST /api/auth/login`, `GET /api/auth/me`, `GET /api/sync/pull`, `POST /api/sync/push`, `GET /api/events` (SSE), `GET/POST/PATCH /api/users`.
 4. Backup: `VACUUM INTO` saat start dan tiap 24 jam, 14 berkas terakhir disimpan.
 
+### 3.5.1. Notifikasi perangkai dan Google Calendar
+Server mengirim email berisi undangan iCalendar (RFC 5545, metode iTIP RFC 5546) memakai akun SMTP yang sama dengan reset kata sandi. Tidak memakai Google Calendar API, sehingga tidak perlu proyek Google Cloud atau OAuth.
+
+| Kejadian pada pesanan | Tindakan server |
+|---|---|
+| Perangkai ditunjuk dan punya email | REQUEST, SEQUENCE 0, ke email perangkai (jeda 15 detik untuk menggabungkan koreksi cepat) |
+| Jadwal, item, catatan, kartu, pelanggan berubah | REQUEST, SEQUENCE + 1 (pembaruan acara yang sama) |
+| Perangkai diganti | CANCEL ke perangkai lama, REQUEST ke perangkai baru |
+| Pesanan batal, perangkai dilepas, email dihapus | CANCEL |
+| Status produksi, pembayaran, cetak | tidak ada email |
+
+Acara: mulai = jadwal − durasi rangkai (bawaan 60 menit), selesai = jadwal; pesanan "ditunggu" = 30 menit sejak dibuat. UID = `kb-<id pesanan>-<sha256(email)[0..10]>@kasir-buket`. Antrean `notify_jobs` dikirim tiap 5 detik; gagal dicoba ulang 8 kali (30 dtk, 2 mnt, 10 mnt, 30 mnt, lalu tiap jam). Pesanan yang jadwalnya lewat > 6 jam tidak diberi undangan baru.
+
+### 3.5.2. Rute ongkir
+`POST /api/geo/route` → OpenRouteService `POST /v2/directions/driving-car` (koordinat `[lng, lat]`, radius penempelan 5 km, kunci di header `Authorization`) → cadangan OSRM `GET /route/v1/driving/…` → bila gagal, 502 dan kasir mengisi km manual.
+
 ### 3.6. Android
 1. Capacitor 8; kode web dibundel ke APK (aplikasi terbuka walau server mati).
 2. Plugin native `ThermalPrinter` (Java): `listPaired`, `printBluetooth`, `printTcp`. Antrean cetak satu per satu. Izin Android 12+: `BLUETOOTH_CONNECT`.

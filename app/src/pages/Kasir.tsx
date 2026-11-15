@@ -7,9 +7,9 @@ import { addDays, dayKey, fmtDate, fromLocalInput, num, rp, toLocalInput } from 
 import { activeShift, checkout, getDeviceConfig, stockLevels, type CheckoutInput, type DeviceConfig } from '../lib/store';
 import { printOrder, type PrintResult } from '../lib/print';
 import { buildStruk, buildTiket } from '../lib/print/receipts';
-import { storeCfg } from '../lib/settings';
+import { pickSurvey, storeCfg } from '../lib/settings';
 import { api } from '../lib/session';
-import { deliveryFee, haversineKm, isShortMapsLink, parseLocalInput, ROAD_FACTOR, type LatLng } from '../lib/geo';
+import { deliveryFee, isShortMapsLink, parseLocalInput, type LatLng } from '../lib/geo';
 import { Field, Modal, MoneyInput, Seg, toast } from '../components/ui';
 import { Icon } from '../components/icons';
 import { ReceiptPreview } from '../components/ReceiptPreview';
@@ -181,12 +181,15 @@ function ItemEditor({ item, isNew, onSave, onClose, onRemove }: { item: OrderIte
   );
 }
 
-/** Pop-up sesekali: tawarkan diskon ulasan Google Maps dan 1–2 pertanyaan survei. */
+/** Pop-up sesekali: tawarkan diskon ulasan Google Maps dan 1–2 pertanyaan survei yang diacak dari bank pertanyaan. */
 function EngageModal({ onClose }: { onClose: (r: EngageResult) => void }) {
   const settings = useLiveQuery(() => db.settings.get('toko'));
   const cfg = storeCfg(settings).engage;
   const [disc, setDisc] = useState(0);
   const [ans, setAns] = useState<Record<string, string>>({});
+  // diacak sekali saat pengaturan selesai dimuat, agar pertanyaan tidak berganti ketika kasir memilih jawaban
+  const [qs, setQs] = useState<ReturnType<typeof pickSurvey> | null>(null);
+  useEffect(() => { if (settings && !qs) setQs(pickSurvey(cfg.survey, Math.max(1, Math.min(2, cfg.per_popup || 2)))); }, [settings]); // eslint-disable-line
   const steps = [cfg.review_discount_min, Math.round((cfg.review_discount_min + cfg.review_discount_max) / 2 / 500) * 500, cfg.review_discount_max].filter((v, i, a) => v > 0 && a.indexOf(v) === i);
   const qrSvg = useMemo(() => {
     if (!cfg.review_url) return '';
@@ -195,11 +198,12 @@ function EngageModal({ onClose }: { onClose: (r: EngageResult) => void }) {
     qr.make();
     return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
   }, [cfg.review_url]);
-  const finish = () => onClose({ reviewDiscount: disc, survey: ans });
+  const clean = () => Object.fromEntries(Object.entries(ans).filter(([, v]) => v));
+  const finish = () => onClose({ reviewDiscount: disc, survey: clean() });
   return (
-    <Modal title="Sebelum bayar" onClose={() => onClose({ reviewDiscount: 0, survey: ans })} wide
+    <Modal title="Sebelum bayar" onClose={() => onClose({ reviewDiscount: 0, survey: clean() })} wide
       footer={<>
-        <button className="btn" onClick={() => onClose({ reviewDiscount: 0, survey: ans })}>Lewati</button>
+        <button className="btn" onClick={() => onClose({ reviewDiscount: 0, survey: clean() })}>Lewati</button>
         <button className="btn primary grow" onClick={finish} data-testid="engage-next">Lanjut ke pembayaran</button>
       </>}>
       <div className="engage" data-testid="engage">
@@ -216,11 +220,11 @@ function EngageModal({ onClose }: { onClose: (r: EngageResult) => void }) {
               {steps.map((v) => <button key={v} className={disc === v ? 'on' : ''} onClick={() => setDisc(v)}>Diskon {rp(v)}</button>)}
             </div>
           </div>
-          {cfg.survey.slice(0, 2).map((s) => (
-            <div key={s.q}>
+          {(qs || []).map((s) => (
+            <div key={s.id} data-testid="survey-q">
               <h3>{s.q}</h3>
               <div className="chips small">
-                {s.options.map((o) => <button key={o} className={ans[s.q] === o ? 'on' : ''} onClick={() => setAns({ ...ans, [s.q]: ans[s.q] === o ? '' : o })}>{o}</button>)}
+                {s.options.map((o) => <button key={o} className={ans[s.id] === o ? 'on' : ''} onClick={() => setAns({ ...ans, [s.id]: ans[s.id] === o ? '' : o })}>{o}</button>)}
               </div>
             </div>
           ))}
@@ -243,8 +247,9 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
     recipient: '', recipientPhone: '', address: '', mapsInput: '', fee: 0, card: '', notes: '', disc: 0, florist: '',
     method: 'Tunai', payType: 'lunas' as 'lunas' | 'dp' | 'nanti', dp: 0, received: 0, usePoints: false,
   });
-  const [geo, setGeo] = useState<{ point: LatLng; km: number; source: 'osrm' | 'estimasi'; calc: string } | null>(null);
+  const [geo, setGeo] = useState<{ point: LatLng | null; km: number; source: 'ors' | 'osrm' | 'manual'; minutes?: number } | null>(null);
   const [geoBusy, setGeoBusy] = useState(false);
+  const [manualKm, setManualKm] = useState<string | null>(null); // terisi bila rute jalan gagal / kasir memilih isi km sendiri
   const [busy, setBusy] = useState(false);
 
   // pelanggan & poin
@@ -275,25 +280,35 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
   const needCustomer = f.payType !== 'lunas' || f.fulfillment !== 'sekarang';
   const invalid = (needCustomer && !f.name.trim()) || (f.fulfillment !== 'sekarang' && !dueIso) || (f.payType === 'dp' && (f.dp <= 0 || f.dp >= t.total)) || shortCash;
 
+  const applyKm = (km: number, source: 'ors' | 'osrm' | 'manual', point: LatLng | null, minutes?: number) => {
+    setGeo({ point, km, source, minutes });
+    setF((x) => ({ ...x, fee: deliveryFee(km, cfg.delivery).fee }));
+  };
+  const feeCalc = geo ? (() => {
+    const r = deliveryFee(geo.km, cfg.delivery);
+    return `${r.kmBilled.toLocaleString('id-ID')} km × ${rp(cfg.delivery.rate)} = ${rp(r.raw)}${r.usedMin ? ` → minimum ${rp(cfg.delivery.min)}` : r.fee !== r.raw ? ` → dibulatkan ${rp(r.fee)}` : ''}`;
+  })() : '';
+  const SRC: Record<string, string> = { ors: 'Rute jalan kendaraan (OpenRouteService)', osrm: 'Rute jalan kendaraan (OSRM, cadangan)', manual: 'Jarak diisi manual' };
+
   async function hitungOngkir() {
     const input = f.mapsInput.trim();
     if (!input) return;
     setGeoBusy(true);
+    let point: LatLng | null = null;
     try {
       const ref = outlet?.location || null;
-      let point: LatLng | null = parseLocalInput(input, ref);
+      point = parseLocalInput(input, ref);
       if (!point && (isShortMapsLink(input) || /^https?:\/\//i.test(input))) point = await api<LatLng>('/api/geo/expand', { body: { url: input }, timeout: 20000 });
       if (!point) throw new Error('Titik tidak terbaca. Tempel link Google Maps, Plus Code (mis. VP3+PR Stabat), atau koordinat.');
-      if (!ref) throw new Error('Lokasi toko belum diatur. Owner: Pengaturan › Toko › Cabang › Atur lokasi.');
-      let km: number, source: 'osrm' | 'estimasi';
-      try { km = (await api<{ km: number }>('/api/geo/route', { body: { from: ref, to: point }, timeout: 15000 })).km; source = 'osrm'; }
-      catch { km = Math.round(haversineKm(ref, point) * ROAD_FACTOR * 100) / 100; source = 'estimasi'; }
-      const r = deliveryFee(km, cfg.delivery);
-      const calc = `${r.kmBilled.toLocaleString('id-ID')} km × ${rp(cfg.delivery.rate)} = ${rp(r.raw)}${r.usedMin ? ` → minimum ${rp(cfg.delivery.min)}` : r.fee !== r.raw ? ` → dibulatkan ${rp(r.fee)}` : ''}`;
-      setGeo({ point, km, source, calc });
-      setF((x) => ({ ...x, fee: r.fee }));
+      if (!ref) throw new Error('Lokasi toko belum diatur. Owner: Pengaturan › Toko & cabang › Lokasi toko.');
+      // hanya rute jalan kendaraan; tidak ada perkiraan garis lurus
+      const r = await api<{ km: number; source: 'ors' | 'osrm'; minutes?: number }>('/api/geo/route', { body: { from: ref, to: point }, timeout: 20000 });
+      setManualKm(null);
+      applyKm(r.km, r.source, point, r.minutes);
     } catch (e) {
       setGeo(null);
+      setManualKm('');
+      setF((x) => ({ ...x, fee: 0 }));
       toast((e as Error).message, 'err');
     } finally {
       setGeoBusy(false);
@@ -310,7 +325,7 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
         cardMessage: f.card, notes: f.notes, payMethod: f.method, payAmount, cashReceived: f.received || payAmount,
         florist: f.florist, manualDiscount: f.disc, reviewDiscount: engage.reviewDiscount, survey: engage.survey,
         pointsRedeemed: redeem, pointsDiscount: pointsDisc, pointsEarned: earn,
-        delivery: f.fulfillment === 'antar' && geo ? { input: f.mapsInput, lat: geo.point.lat, lng: geo.point.lng, km: geo.km, km_source: geo.source, rate: cfg.delivery.rate, min: cfg.delivery.min } : null,
+        delivery: f.fulfillment === 'antar' && geo ? { input: f.mapsInput, lat: geo.point?.lat ?? 0, lng: geo.point?.lng ?? 0, km: geo.km, km_source: geo.source, rate: cfg.delivery.rate, min: cfg.delivery.min } : null,
       };
       const order = await checkout(input);
       const results = await printOrder(order, ['kasir', 'produksi'], { skipRelay: true });
@@ -361,7 +376,13 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
                   <button className="btn" onClick={hitungOngkir} disabled={geoBusy || !f.mapsInput.trim()} data-testid="btn-ongkir"><Icon name="pin" size={18} />{geoBusy ? 'Menghitung…' : 'Hitung'}</button>
                 </div>
               </Field>
-              {geo && <div className="calc" data-testid="ongkir-calc">{geo.calc}<br />{geo.source === 'osrm' ? 'Jarak jalan (OpenStreetMap)' : `Perkiraan: garis lurus × ${String(ROAD_FACTOR).replace('.', ',')} (rute jalan tidak tersedia)`}</div>}
+              {geo && geo.km > 0 && <div className="calc" data-testid="ongkir-calc">{feeCalc}<br />{SRC[geo.source]}{geo.minutes ? ` · ± ${geo.minutes} menit berkendara` : ''}</div>}
+              {manualKm !== null ? (
+                <Field label="Jarak rute (km)" hint="Lihat jarak rute motor/mobil di Google Maps, lalu isi di sini">
+                  <input inputMode="decimal" value={manualKm} data-testid="km-manual" placeholder="mis. 6,8"
+                    onChange={(e) => { setManualKm(e.target.value); const km = Number(e.target.value.replace(',', '.')); if (km > 0) applyKm(km, 'manual', geo?.point ?? null); else setGeo(null); }} />
+                </Field>
+              ) : <button type="button" className="linkish small" onClick={() => setManualKm('')}>Isi jarak km manual</button>}
               <div className="cols">
                 <Field label="Nama penerima"><input value={f.recipient} onChange={(e) => setF({ ...f, recipient: e.target.value })} /></Field>
                 <Field label="HP penerima"><input inputMode="tel" value={f.recipientPhone} onChange={(e) => setF({ ...f, recipientPhone: e.target.value })} /></Field>

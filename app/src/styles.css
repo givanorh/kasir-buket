@@ -77,6 +77,7 @@ a { color: var(--plum) }
 .icon-btn:hover { background: var(--line-2); color: var(--ink) }
 .linkish { border: 0; background: none; text-align: left; cursor: pointer; padding: 0 }
 .linkish.center { text-align: center; color: var(--plum); font-weight: 600; padding: 6px }
+.linkish.small { color: var(--plum); font-weight: 600; font-size: 13px; align-self: flex-start }
 
 /* kerangka */
 .shell { display: flex; min-height: 100vh }
@@ -86,14 +87,25 @@ a { color: var(--plum) }
 .side a { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: var(--r-sm); text-decoration: none; color: var(--ink-2); font-weight: 600 }
 .side a:hover { color: var(--ink); background: var(--line-2) }
 .side a.on { background: var(--plum); color: #fff }
-.main { flex: 1; min-width: 0; display: flex; flex-direction: column }
-.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 24px; background: color-mix(in srgb, var(--paper) 88%, transparent); backdrop-filter: blur(8px); position: sticky; top: 0; z-index: 30 }
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; --maxw: 1240px; --gut: max(24px, calc((100% - var(--maxw)) / 2)) }
+/* layar lebar: isi dibatasi & di tengah agar label dan angka tidak terpisah jauh; kasir & produksi boleh lebih lebar */
+.main.wide { --maxw: 1680px }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px var(--gut); background: color-mix(in srgb, var(--paper) 88%, transparent); backdrop-filter: blur(8px); position: sticky; top: 0; z-index: 30 }
 .top h1 { font-size: 22px; font-weight: 800 }
 .top-r { display: flex; align-items: center; gap: 10px }
-.content { padding: 8px 24px 32px; flex: 1 }
+.content { padding: 8px var(--gut) 32px; flex: 1 }
 .page { display: flex; flex-direction: column; gap: 16px }
+.page > .seg, .stack > .seg { align-self: flex-start }
 .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap }
-.toolbar input { max-width: 380px }
+.toolbar input { max-width: 420px }
+.toolbar select, .toolbar input[type=date] { width: auto; min-width: 150px }
+.toolbar .field { flex-direction: row; align-items: center; gap: 8px }
+.toolbar.filters .muted { margin-left: 4px }
+.daterange { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 13px }
+.daterange input { width: 160px; min-width: 0 }
+.btns { display: flex; gap: 8px; flex-wrap: wrap }
+.section-h { font-size: 15px; margin: 6px 0 -4px }
+.clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 
 .sync { display: inline-flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 6px 8px; font-size: 13px; color: var(--ink-2); cursor: pointer; border-radius: 99px }
 .sync i { width: 8px; height: 8px; border-radius: 50%; background: var(--leaf); box-shadow: 0 0 0 3px var(--leaf-soft) }
@@ -113,6 +125,7 @@ a { color: var(--plum) }
 
 /* komponen */
 .field { display: flex; flex-direction: column; gap: 6px; min-width: 0 }
+.field > .seg { align-self: flex-start }
 .field-label { font-size: 13px; font-weight: 600; color: var(--ink-2) }
 .field-hint { font-size: 12.5px; color: var(--ink-2) }
 .money { display: flex; align-items: center; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); padding-left: 12px; min-height: 44px }
@@ -129,6 +142,7 @@ a { color: var(--plum) }
 .empty { color: var(--ink-2); text-align: center; padding: 32px 12px; font-size: 14px }
 .note { padding: 10px 14px; border-radius: var(--r-sm); font-size: 13.5px }
 .note.warn { background: var(--amber-soft); color: #6c4a0f }
+.note.small { font-size: 12.5px; line-height: 1.45 }
 .chips { display: flex; gap: 6px; flex-wrap: wrap }
 .chips button { border: 1px solid var(--line); background: var(--surface); border-radius: 99px; padding: 7px 14px; cursor: pointer; font-weight: 600; font-size: 14px; min-height: 38px; color: var(--ink-2) }
 .chips button.on { background: var(--ink); color: #fff; border-color: var(--ink) }
@@ -145,6 +159,51 @@ a { color: var(--plum) }
 .card { background: var(--surface); border-radius: var(--r-lg); border: 1px solid var(--line); padding: 16px 18px; display: flex; flex-direction: column; gap: 8px }
 .card.narrow { max-width: 540px }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start }
+.split.even { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) }
+/* daftar label–nilai: label di kolom kiri, nilai langsung di sampingnya (bukan di ujung kanan kartu) */
+.dl { display: grid; grid-template-columns: minmax(110px, 32%) minmax(0, 1fr); gap: 7px 16px; margin: 2px 0 4px; font-size: 14px }
+.dl dt { color: var(--ink-2) }
+.dl dd { margin: 0; font-weight: 600; min-width: 0 }
+.devcode { display: flex; gap: 14px; align-items: center; background: var(--paper); border-radius: var(--r-md); padding: 12px 14px }
+.devcode .code { font-size: 26px; font-weight: 800; color: var(--plum); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; min-width: 70px; text-align: center; padding: 6px 12px; letter-spacing: .03em }
+.devpick { display: flex; flex-direction: column; gap: 10px; background: var(--paper); border-radius: var(--r-md); padding: 12px }
+/* pengguna & perangkai */
+.ulist, .flist { display: flex; flex-direction: column; container-type: inline-size }
+.formgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px 16px; align-items: start }
+.uhead, .urow { display: grid; grid-template-columns: minmax(0, 1fr) 128px 170px 236px; gap: 12px; align-items: center }
+.fhead, .frow { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(170px, 1.3fr) 186px; gap: 10px; align-items: center }
+.uhead, .fhead { font-size: 12px; color: var(--ink-2); font-weight: 700; padding-bottom: 6px; border-bottom: 1px solid var(--line-2) }
+.urow, .frow { padding: 10px 0; border-bottom: 1px solid var(--line-2) }
+.urow:last-child, .frow:last-child { border-bottom: 0 }
+.urow.off { opacity: .6 }
+.urow select, .frow input { min-height: 38px; padding: 6px 10px }
+.uwho { display: flex; gap: 10px; align-items: center; min-width: 0 }
+.uwho .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.uwho .badge { margin-left: 6px }
+.uact { display: flex; gap: 2px; justify-content: flex-end; align-items: center; flex-wrap: wrap }
+/* bank survei */
+.qlist { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden }
+.qrow { display: grid; grid-template-columns: 24px 24px minmax(0, 1fr) 210px auto; gap: 12px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line-2) }
+.qrow:last-child { border-bottom: 0 }
+.qrow.off { background: #faf9fa }
+.qrow.off .qbody, .qrow.off .qstat { opacity: .5 }
+.qno { font-size: 12px; color: var(--ink-3); font-weight: 700; text-align: right }
+.qopts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px }
+.qopts span { font-size: 12px; background: var(--paper); border-radius: 99px; padding: 2px 9px; color: var(--ink-2) }
+.qstat { font-size: 13px }
+/* daftar pengguna/perangkai menyesuaikan lebar kartunya sendiri (container query), bukan lebar layar */
+@container (max-width: 760px) {
+  .uhead { display: none }
+  .urow { grid-template-columns: 1fr 1fr }
+  .uwho, .urow .uact { grid-column: 1 / -1 }
+  .urow .uact { justify-content: flex-start }
+}
+@container (max-width: 520px) {
+  .fhead { display: none }
+  .frow { grid-template-columns: 1fr }
+  .frow .uact { justify-content: flex-start }
+}
 .box { border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px }
 .progress { position: relative; height: 24px; background: var(--line-2); border-radius: 99px; overflow: hidden }
 .progress i { position: absolute; inset: 0 auto 0 0; background: var(--plum) }
@@ -233,9 +292,13 @@ a { color: var(--plum) }
 
 /* tabel */
 .table { background: var(--surface); border-radius: var(--r-lg); border: 1px solid var(--line); overflow: hidden }
-.thead, .trow { display: flex; gap: 12px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line-2) }
+/* tabel berbasis grid: tiap tabel menetapkan --cols (dan --cols-sm untuk HP) sehingga kolom angka sempit & rata kanan */
+.thead, .trow { display: grid; grid-template-columns: var(--cols, minmax(0, 1fr)); gap: 16px; align-items: center; padding: 11px 16px; border-bottom: 1px solid var(--line-2) }
 .thead { font-size: 12.5px; color: var(--ink-2); font-weight: 700 }
-.thead > div, .trow > div { min-width: 70px }
+.thead > *, .trow > * { min-width: 0 }
+.trow > .right, .thead > .right { white-space: nowrap }
+.table.flat { border: 0; border-radius: 0; background: transparent; margin: 0 -4px }
+.table.flat .thead, .table.flat .trow { padding-left: 4px; padding-right: 4px; background: transparent }
 .trow { width: 100%; background: var(--surface); border-left: 0; border-right: 0; border-top: 0; text-align: left; cursor: pointer; font-size: 14px }
 .trow:last-child { border-bottom: 0 }
 button.trow:hover, .trow.click:hover { background: #faf9fa }
@@ -300,6 +363,9 @@ button.trow:hover, .trow.click:hover { background: #faf9fa }
 .photo { width: 108px; height: 108px; border-radius: var(--r-md); border: 1px dashed var(--line); display: grid; place-items: center; color: var(--ink-2); background: center/cover var(--paper); cursor: pointer; flex: none }
 
 /* HP & tablet kecil */
+@media (max-width: 1100px) {
+  .split, .split.even { grid-template-columns: 1fr }
+}
 @media (max-width: 960px) {
   .two, .checkout, .success, .detail, .crm, .engage { grid-template-columns: 1fr }
   .checkout > .stack:last-child { position: static }
@@ -329,4 +395,8 @@ button.trow:hover, .trow.click:hover { background: #faf9fa }
   .modal-bg { padding: 0; align-items: end }
   .modal { border-radius: 22px 22px 0 0; max-height: 94vh }
   .hbar { grid-template-columns: 100px 1fr 44px }
+  .thead, .trow { grid-template-columns: var(--cols-sm, var(--cols, minmax(0, 1fr))); gap: 10px; padding: 10px 12px }
+  .qrow { grid-template-columns: 24px minmax(0, 1fr) auto }
+  .qno, .qstat { display: none }
+  .dl { grid-template-columns: minmax(96px, 38%) minmax(0, 1fr) }
 }

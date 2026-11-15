@@ -17,8 +17,23 @@ const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kb-e2e-'));
 const log = (...a) => console.log('•', ...a);
 const assert = (c, m) => { if (!c) throw new Error('GAGAL: ' + m); log('OK', m); };
 
+// layanan rute tiruan: OpenRouteService menjawab 7,38 km; OSRM sengaja mati agar terbukti ORS yang dipakai
+const http = await import('node:http');
+const routeCalls = [];
+const routeSrv = http.createServer((req, res) => {
+  let body = '';
+  req.on('data', (d) => (body += d));
+  req.on('end', () => {
+    routeCalls.push({ url: req.url, auth: req.headers.authorization, body });
+    if (req.method === 'POST' && req.url === '/v2/directions/driving-car') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ routes: [{ summary: { distance: 7380, duration: 840 } }] })); }
+    res.writeHead(503); res.end();
+  });
+});
+await new Promise((r) => routeSrv.listen(0, '127.0.0.1', r));
+const ROUTE = `http://127.0.0.1:${routeSrv.address().port}`;
+
 const srv = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'server/src/index.js'], {
-  cwd: ROOT, env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1', DATA_DIR: dataDir, STATIC_DIR: path.join(ROOT, 'app/dist') }, stdio: 'inherit',
+  cwd: ROOT, env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1', DATA_DIR: dataDir, STATIC_DIR: path.join(ROOT, 'app/dist'), ORS_URL: ROUTE, OSRM_URL: ROUTE, NOTIFY_DELAY_MS: '300', NOTIFY_INTERVAL_MS: '400' }, stdio: 'inherit',
 });
 await new Promise((r) => setTimeout(r, 800));
 
@@ -40,6 +55,7 @@ try {
   await A.getByLabel('Nama pemilik').fill('Vano');
   await A.getByLabel('Username').fill('vano');
   await A.getByLabel('Kata sandi (min. 6)').fill('rahasia1');
+  assert(/Kode nomor struk: KK/.test(await A.getByTestId('kode-preview').textContent()), 'komputer terdeteksi: kode KK (Komputer Kasir)');
   await A.getByRole('button', { name: 'Siapkan toko' }).click();
   await A.getByTestId('sync-badge').waitFor();
   assert(true, 'setup toko & login owner');
@@ -62,8 +78,8 @@ try {
   await A.getByLabel('Nama', { exact: true }).fill('Sari (perangkai)');
   await A.getByLabel('Username').fill('rangkai1');
   await A.getByLabel('Kata sandi (min. 6)').fill('rangkai1');
-  await A.getByRole('radio', { name: 'Perangkai', exact: true }).click();
-  await A.getByRole('button', { name: 'Tambah', exact: true }).click();
+  await A.getByRole('group', { name: 'Peran' }).getByRole('radio', { name: 'Perangkai' }).click();
+  await A.getByRole('button', { name: 'Tambah pengguna', exact: true }).click();
   await A.getByText('@rangkai1').waitFor();
   assert(true, 'akun perangkai dibuat');
 
@@ -94,7 +110,7 @@ try {
   await A.screenshot({ path: path.join(SHOTS, '2-pembayaran-dp.png') });
   await A.getByTestId('btn-simpan').click();
   const no1 = await A.getByTestId('order-no').textContent();
-  assert(/^\d{6}-A001$/.test(no1), `nomor transaksi offline-unik ${no1}`);
+  assert(/^\d{6}-KK001$/.test(no1), `nomor transaksi berawalan kode perangkat bermakna ${no1}`);
   const pk = await A.getByTestId('print-kasir').textContent();
   const pp = await A.getByTestId('print-produksi').textContent();
   assert(/dialog cetak dibuka/.test(pk), 'struk pelanggan → printer kasir');
@@ -112,7 +128,8 @@ try {
   await B.goto(BASE);
   await B.getByLabel('Username').fill('rangkai1');
   await B.getByLabel('Kata sandi').fill('rangkai1');
-  await B.getByLabel('Nama perangkat ini').fill('HP Ruang Rangkai');
+  await B.getByRole('radio', { name: 'Ruang Rangkai' }).click();
+  assert(/Kode nomor struk: HR/.test(await B.getByTestId('kode-preview').textContent()), 'HP terdeteksi otomatis, fungsi ruang rangkai: kode HR');
   await B.getByRole('button', { name: 'Masuk' }).click();
   await B.getByTestId('sync-badge').waitFor();
   await B.goto(BASE + '/#/pengaturan');
@@ -186,14 +203,37 @@ try {
   await A.getByLabel('Frekuensi pop-up').fill('1');
   await A.getByPlaceholder('https://g.page/r/…/review').fill('https://g.page/r/buketstabat/review');
   await A.getByTestId('simpan-promo').click();
+  await A.getByTestId('ors-key').fill('eyJvcmciOiJ1amkta3VuY2ktb3JzLTEyMzQ1Njc4OTAifQ==');
+  await A.getByRole('button', { name: 'Simpan kunci' }).click();
+  await A.getByText('kunci …fQ==').waitFor();
+  assert(true, 'kunci OpenRouteService tersimpan di server (hanya 4 karakter terakhir ditampilkan)');
   await A.screenshot({ path: path.join(SHOTS, '7-pengaturan-promo.png'), fullPage: true });
+  // bank survei: ≥ 15 pertanyaan bawaan, bisa ditambah
+  await A.getByRole('radio', { name: 'Survei' }).click();
+  await A.getByTestId('survey-row').first().waitFor();
+  const nq = await A.getByTestId('survey-row').count();
+  assert(nq >= 15, `tab Survei: ${nq} pertanyaan bawaan`);
+  await A.getByTestId('tanya-baru').click();
+  await A.getByTestId('tanya-teks').fill('Warna buket favorit?');
+  await A.getByTestId('tanya-opsi').fill('Pink\nPutih\nMerah');
+  await A.getByTestId('simpan-tanya').click();
+  await A.waitForFunction((n) => document.querySelectorAll('[data-testid=survey-row]').length === n + 1, nq);
+  assert(true, 'pertanyaan survei baru ditambahkan');
+  await A.screenshot({ path: path.join(SHOTS, '12-survei.png'), fullPage: true });
   await A.goto(BASE + '/#/kasir');
   await card('Buket Uang 50rb x10').click();
   await A.getByTestId('btn-bayar').click();
   await A.getByTestId('engage').waitFor();
   await A.getByRole('button', { name: 'Diskon Rp 10.000' }).click();
-  await A.getByRole('button', { name: 'Instagram', exact: true }).click();
-  await A.getByRole('button', { name: 'Wisuda', exact: true }).click();
+  const qBlocks = A.getByTestId('survey-q');
+  await qBlocks.first().waitFor();
+  const surveyAns = [];
+  for (let i = 0; i < await qBlocks.count(); i++) {
+    const blk = qBlocks.nth(i);
+    surveyAns.push([await blk.locator('h3').textContent(), await blk.locator('button').first().textContent()]);
+    await blk.locator('button').first().click();
+  }
+  assert(surveyAns.length === 2, `pop-up menampilkan 2 pertanyaan acak: ${surveyAns.map((x) => x.join(' → ')).join('; ')}`);
   await A.screenshot({ path: path.join(SHOTS, '8-popup-ulasan-survei.png') });
   await A.getByTestId('engage-next').click();
   assert(true, 'pop-up ulasan Google Maps (QR) & survei muncul sesuai frekuensi');
@@ -208,7 +248,9 @@ try {
   const calcText = await A.getByTestId('ongkir-calc').textContent();
   const fee = Number((await A.getByLabel('Ongkir').inputValue()).replace(/\D/g, ''));
   console.log('   ', calcText);
-  assert(fee >= 15000 && fee % 1000 === 0 && /km × Rp 3\.000/.test(calcText), `ongkir otomatis Rp ${fee.toLocaleString('id-ID')} (km × Rp 3.000, min Rp 15.000)`);
+  assert(fee === 23000 && /7,4 km × Rp 3\.000 = Rp 22\.200 → dibulatkan Rp 23\.000/.test(calcText) && /OpenRouteService/.test(calcText), `ongkir rute jalan ORS: 7,38 km → 7,4 km × 3.000 = 22.200 → Rp ${fee.toLocaleString('id-ID')}`);
+  const orsCall = routeCalls.find((c) => c.url === '/v2/directions/driving-car');
+  assert(orsCall && orsCall.auth === 'eyJvcmciOiJ1amkta3VuY2ktb3JzLTEyMzQ1Njc4OTAifQ==' && JSON.parse(orsCall.body).coordinates[1][0] === 98.5, 'server memanggil OpenRouteService dengan kunci & koordinat [lng, lat]');
   await A.getByLabel('Nama penerima').fill('Dewi');
   await A.getByLabel('Alamat lengkap').fill('Jl. Sudirman 5, Stabat');
   await A.getByRole('button', { name: 'QRIS' }).click();
@@ -231,8 +273,8 @@ try {
   assert(true, 'cetak ulang struk langsung dari baris pesanan');
   await A.goto(BASE + '/#/laporan');
   await A.getByRole('radio', { name: 'Analisis penjualan' }).click();
-  await A.getByTestId('analisis').getByText('Instagram').waitFor();
-  assert(true, 'jawaban survei masuk ke analisis penjualan');
+  for (const [qText] of surveyAns) await A.getByTestId('analisis').getByText(qText, { exact: false }).first().waitFor();
+  assert(true, 'jawaban 2 pertanyaan acak masuk ke analisis penjualan');
   await A.screenshot({ path: path.join(SHOTS, '11-analisis.png'), fullPage: true });
 
   // impor data Kasir Pintar (format sesuai respons getJsonLaporanModal & laporan_filter_labarugi)
@@ -322,6 +364,29 @@ try {
   await C.getByRole('button', { name: 'Masuk' }).waitFor();
   assert(true, 'keluar akun lewat menu nama di kanan atas');
   assert(true, `lupa kata sandi: kode ${code} dikirim via email, sandi diganti, login dengan sandi baru berhasil`);
+
+  // ---------- notifikasi perangkai + undangan Google Calendar ----------
+  await A.goto(BASE + '/#/pengaturan');
+  await A.getByRole('radio', { name: 'Perangkai', exact: true }).click();
+  await A.getByLabel('Email Nazra').fill('nazra@example.com');
+  await A.getByTestId('simpan-perangkai').click();
+  const mailTo = (to, method) => mails.some((m) => m.includes(`To: <${to}>`) && m.includes(`method=${method}`));
+  for (let i = 0; i < 40 && !mailTo('nazra@example.com', 'REQUEST'); i++) await A.waitForTimeout(250);
+  assert(mailTo('nazra@example.com', 'REQUEST'), `email Nazra disimpan → undangan kalender pesanan ${no1} terkirim otomatis`);
+  const inv = mails.find((m) => m.includes('To: <nazra@example.com>') && m.includes('method=REQUEST'));
+  const icsB64 = inv.split('method=REQUEST')[1].split('\n\n')[1].split('--')[0].replace(/\s/g, '');
+  const icsTxt = Buffer.from(icsB64, 'base64').toString();
+  assert(/BEGIN:VEVENT/.test(icsTxt) && /SUMMARY:Rangkai #KK001/.test(icsTxt) && !/Rp/.test(icsTxt), 'isi undangan: VEVENT "Rangkai #KK001", tanpa harga');
+  await A.getByTestId('notif-row').filter({ hasText: 'Terkirim' }).first().waitFor({ timeout: 15000 });
+  await A.screenshot({ path: path.join(SHOTS, '13-perangkai-notifikasi.png'), fullPage: true });
+  A.once('dialog', (d) => d.accept('Pelanggan membatalkan'));
+  await A.goto(BASE + '/#/pesanan');
+  await A.getByRole('radio', { name: '30 hari' }).click();
+  await A.locator('.trow', { hasText: no1 }).click();
+  await A.getByRole('button', { name: 'Batalkan transaksi' }).click();
+  for (let i = 0; i < 40 && !mailTo('nazra@example.com', 'CANCEL'); i++) await A.waitForTimeout(250);
+  assert(mailTo('nazra@example.com', 'CANCEL'), 'pesanan dibatalkan → undangan dibatalkan (METHOD:CANCEL), acara hilang dari kalender perangkai');
+  await A.keyboard.press('Escape');
   smtp.close();
   console.log('\nSEMUA UJI E2E LULUS');
 } catch (e) {
@@ -330,6 +395,7 @@ try {
 } finally {
   await browser.close();
   srv.kill();
+  routeSrv.close();
   fs.rmSync(dataDir, { recursive: true, force: true });
   setTimeout(() => process.exit(process.exitCode || 0), 500);
 }

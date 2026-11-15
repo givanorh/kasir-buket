@@ -3,6 +3,7 @@ import { useSyncExternalStore } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { db, getMeta, resetLocalData, setMeta } from './db';
 import type { Role } from './types';
+import { FN_LABEL, KIND_LABEL, type DeviceFn, type DeviceKind } from './device';
 
 export interface SessionUser { id: string; name: string; username: string; role: Role; outlet_id?: string }
 export interface SessionDevice { id: string; code: string; name?: string; outlet_id?: string }
@@ -84,9 +85,9 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
  * Masuk ke server. Bila server ternyata basis data lain (instanceId berbeda dari yang terakhir dipakai),
  * data lokal dikosongkan agar tidak tercampur; perubahan yang belum terkirim butuh konfirmasi.
  */
-export async function login(username: string, password: string, deviceName: string, confirmDiscard?: (pending: number) => boolean) {
+export async function login(username: string, password: string, dev: { kind: DeviceKind; fn: DeviceFn }, confirmDiscard?: (pending: number) => boolean) {
   const r = await api<{ token: string; user: SessionUser; device: SessionDevice; instanceId?: string }>('/api/auth/login', {
-    body: { username, password, deviceId: session.deviceId, deviceName },
+    body: { username, password, deviceId: session.deviceId, deviceKind: dev.kind, deviceFn: dev.fn, deviceName: `${KIND_LABEL[dev.kind]} ${FN_LABEL[dev.fn]}` },
   });
   if (r.instanceId && session.serverInstance && r.instanceId !== session.serverInstance) {
     const pending = await db.outbox.count();
@@ -98,6 +99,13 @@ export async function login(username: string, password: string, deviceName: stri
   }
   await updateSession({ token: r.token, user: r.user, device: r.device, serverInstance: r.instanceId || session.serverInstance });
   return r;
+}
+
+/** Ubah jenis/fungsi perangkat ini; server memberi kode baru (kode lama tetap dicadangkan). */
+export async function changeDeviceCode(kind: DeviceKind, fn: DeviceFn) {
+  const r = await api<{ device: SessionDevice }>('/api/devices/code', { body: { kind, fn } });
+  await updateSession({ device: r.device });
+  return r.device;
 }
 
 export async function logout() {

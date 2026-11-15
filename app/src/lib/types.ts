@@ -40,14 +40,16 @@ export interface LoyaltyCfg {
   tier_silver: number; // belanja 12 bulan (Rp) untuk Silver
   tier_gold: number;
 }
-export interface SurveyQuestion { q: string; options: string[] }
+/** Pertanyaan survei. `id` menjadi kunci jawaban di `order.survey`, sehingga teks boleh diubah tanpa memecah hasil. */
+export interface SurveyQuestion { id: string; q: string; options: string[]; active?: boolean }
 export interface EngageCfg {
   enabled: boolean;
   every_n: number; // munculkan pop-up tiap N transaksi per perangkat
   review_url: string; // link ulasan Google Maps
   review_discount_min: number;
   review_discount_max: number;
-  survey: SurveyQuestion[];
+  survey: SurveyQuestion[]; // bank pertanyaan; pop-up memilih `per_popup` pertanyaan aktif secara acak
+  per_popup: number;
 }
 
 export interface Category extends Base { name: string; sort?: number }
@@ -121,13 +123,13 @@ export interface Order extends Base {
   void_at?: string;
   source?: 'app' | 'kasirpintar';
   florist?: string; // perangkai yang ditunjuk
-  delivery?: { input: string; lat: number; lng: number; km: number; km_source: 'osrm' | 'estimasi' | 'manual'; rate: number; min: number } | null;
+  delivery?: { input: string; lat: number; lng: number; km: number; km_source: 'ors' | 'osrm' | 'estimasi' | 'manual'; rate: number; min: number } | null;
   manual_discount?: number;
   points_earned?: number;
   points_redeemed?: number;
   points_discount?: number;
   review_discount?: number;
-  survey?: Record<string, string>;
+  survey?: Record<string, string>; // id pertanyaan -> jawaban (data v1.2: teks pertanyaan -> jawaban)
 }
 
 export interface Payment extends Base {

@@ -55,3 +55,26 @@ export async function roadDistanceKm(from, to, { fetchFn = fetch, base = 'https:
   if (j?.code !== 'Ok' || !Number.isFinite(m)) throw Object.assign(new Error('Rute tidak ditemukan'), { status: 502 });
   return Math.round((m / 1000) * 100) / 100;
 }
+
+/**
+ * Jarak jalan lewat OpenRouteService (profil driving-car). Butuh kunci API gratis dari account.heigit.org
+ * (kuota 2.000 rute/hari, 40/menit). Kunci hanya disimpan di server.
+ */
+export async function orsDistanceKm(from, to, { fetchFn = fetch, key, base = 'https://api.openrouteservice.org' } = {}) {
+  for (const p of [from, to]) if (!p || !okLat(Number(p.lat)) || !okLng(Number(p.lng))) throw Object.assign(new Error('Koordinat tidak valid'), { status: 400 });
+  if (!key) throw Object.assign(new Error('Kunci OpenRouteService belum diisi'), { status: 400 });
+  const res = await fetchFn(`${base}/v2/directions/driving-car`, {
+    method: 'POST',
+    headers: { Authorization: key, 'Content-Type': 'application/json', Accept: 'application/json', 'User-Agent': 'KasirBuket/1.3' },
+    // radiuses: titik boleh berjarak ≤ 5 km dari jalan terdekat (rumah di dalam kebun/gang belum terpetakan)
+    body: JSON.stringify({ coordinates: [[Number(from.lng), Number(from.lat)], [Number(to.lng), Number(to.lat)]], radiuses: [5000, 5000], instructions: false }),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (res.status === 401 || res.status === 403) throw Object.assign(new Error(res.status === 403 ? 'Kuota harian OpenRouteService habis atau kunci ditolak' : 'Kunci OpenRouteService tidak valid'), { status: 502 });
+  if (res.status === 429) throw Object.assign(new Error('Terlalu banyak permintaan rute per menit (batas 40/menit)'), { status: 502 });
+  const j = await res.json().catch(() => null);
+  if (!res.ok) throw Object.assign(new Error(`OpenRouteService: ${j?.error?.message || res.status}`), { status: 502 });
+  const s = j?.routes?.[0]?.summary;
+  if (!s || !Number.isFinite(s.distance)) throw Object.assign(new Error('Rute tidak ditemukan'), { status: 502 });
+  return { km: Math.round((s.distance / 1000) * 100) / 100, minutes: Math.round((s.duration || 0) / 60) };
+}

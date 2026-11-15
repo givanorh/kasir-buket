@@ -64,8 +64,10 @@ export async function planImport(data: KPExport, outletId: string, opts: { impor
   const prodBySku = new Map<string, string>();
   for (const p of data.products || []) {
     const id = safeId('kp-', p.id_barang ?? p.id ?? p.kode_barang);
-    const cost = n(p.harga_modal) || n(p.harga_beli);
-    const track = opts.importStock && n(p.stok) !== 0;
+    // harga_beli = HPP per unit. harga_modal di Kasir Pintar = nilai modal total (harga_beli × stok), bukan per unit.
+    const stok = n(p.stok);
+    const cost = n(p.harga_beli) || (n(p.harga_modal) && stok > 0 ? Math.round(n(p.harga_modal) / stok) : n(p.harga_modal));
+    const track = opts.importStock && stok !== 0;
     writes.push({
       c: 'products', id, patch: {
         name: String(p.nama_barang || p.name || 'Tanpa nama'), sku: String(p.kode_barang || ''), category_id: catId(p.kategori),
@@ -73,7 +75,7 @@ export async function planImport(data: KPExport, outletId: string, opts: { impor
         price: n(p.harga_jual), cost, track_stock: track, min_stock: n(p.stok_minim), description: String(p.keterangan || ''), active: !n(p.soft_delete),
       },
     });
-    if (track) writes.push({ c: 'stock_moves', id: safeId('kpstk-', id), patch: { product_id: id, outlet_id: outletId, qty: n(p.stok), reason: 'impor', note: 'Stok awal dari Kasir Pintar' } });
+    if (track) writes.push({ c: 'stock_moves', id: safeId('kpstk-', id), patch: { product_id: id, outlet_id: outletId, qty: stok, reason: 'impor', note: 'Stok awal dari Kasir Pintar' } });
     if (p.kode_barang) prodBySku.set(String(p.kode_barang), id);
     products++;
   }

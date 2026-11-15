@@ -56,7 +56,7 @@ export default function Pelanggan() {
         <button className="btn primary" onClick={() => setEdit({ id: '', name: '', phone: '' })}><Icon name="plus" size={18} />Pelanggan</button>
       </div>
       <div className="crm">
-        <div className="table">
+        <div className="table" style={{ ['--cols' as string]: '36px minmax(0,1fr) auto' }}>
           {list.map((c) => {
             const s = stats.get(c.id)!;
             return (

@@ -8,25 +8,26 @@ Aplikasi kasir (POS) khusus usaha buket milik Vano (Stabat, Langkat). Satu kode 
 ## Perintah
 ```bash
 # server (tanpa dependensi npm; Node >= 22.13 karena node:sqlite)
-cd server && npm test                      # 6 uji integrasi
-node server/src/index.js                   # http://localhost:8080 (env: PORT, HOST, DATA_DIR, STATIC_DIR, TOKEN_DAYS, SECRET)
+cd server && npm test                      # 24 uji (integrasi, notifikasi/kalender, rute, geo)
+node server/src/index.js                   # http://localhost:8080 (env: PORT, HOST, DATA_DIR, STATIC_DIR, TOKEN_DAYS, SECRET, ORS_URL, OSRM_URL, NOTIFY_DELAY_MS, NOTIFY_INTERVAL_MS)
 
 # aplikasi
 cd app && npm ci
-npm test                                   # 9 uji logika (tsx + node:test)
+npm test                                   # 15 uji logika (tsx + node:test)
 npm run build                              # tsc --noEmit && vite build -> app/dist
 npm run dev                                # vite, proxy /api ke :8080
 npx cap sync android                       # salin dist ke proyek Android
 
-# end-to-end 2 perangkat (Playwright + Chromium, butuh app/dist)
+# end-to-end 2 perangkat (Playwright + Chromium, butuh app/dist; ORS & SMTP tiruan lokal)
 node e2e/e2e.mjs
 ```
 Selalu jalankan `server: npm test`, `app: npm test && npm run build`, dan `node e2e/e2e.mjs` sebelum menyatakan pekerjaan selesai.
 
 ## Struktur
-- `server/src/index.js` — HTTP API, sinkron push/pull, SSE `/api/events`, pengguna, lupa kata sandi (`/api/auth/forgot`, `/api/auth/reset`), konfigurasi SMTP (`/api/email-config`, owner), file statis. `db.js` (skema SQLite, migrasi kolom, `instance_id`, backup `VACUUM INTO`), `auth.js` (scrypt, token HMAC, limiter), `smtp.js` (klien SMTP tanpa dependensi: TLS 465 / STARTTLS), `reset-password.js` (CLI pemulihan sandi di komputer server).
+- `server/src/index.js` — HTTP API, sinkron push/pull, SSE `/api/events`, pengguna, lupa kata sandi (`/api/auth/forgot`, `/api/auth/reset`), konfigurasi SMTP (`/api/email-config`, owner), file statis. `db.js` (skema SQLite, migrasi kolom, `instance_id`, backup `VACUUM INTO`), `auth.js` (scrypt, token HMAC, limiter), `smtp.js` (klien SMTP tanpa dependensi: TLS 465 / STARTTLS; `buildMessage` menyusun MIME undangan kalender), `ics.js` (iCalendar REQUEST/CANCEL, lipat baris 75 oktet), `notify.js` (notifikasi perangkai: `reconcile` per pesanan, antrean `notify_jobs`, coba ulang), `geo.js` (link Maps, OpenRouteService, OSRM), `reset-password.js` (CLI pemulihan sandi di komputer server).
 - `app/src/lib/` — `types.ts` (model data), `db.ts` (Dexie/IndexedDB), `sync.ts` (mesin sinkron), `store.ts` (operasi domain: checkout, pembayaran, void, nomor transaksi, konfigurasi perangkat), `calc.ts` (rumus murni: total, laporan, shift, kapasitas), `kasirpintar.ts` (impor), `print/` (`escpos.ts` encoder, `receipts.ts` isi struk/tiket, `index.ts` transport + stasiun cetak).
-- `app/src/pages/` — Kasir, Pesanan, Produksi, Produk, Pelanggan, Shift, Laporan, Pengaturan, Setup.
+- `app/src/lib/device.ts` (kode perangkat jenis+fungsi), `settings.ts` (bawaan + bank 20 pertanyaan survei, `pickSurvey`, `surveyBank`), `labels.ts`.
+- `app/src/pages/` — Kasir, Pesanan, Produksi, Produk, Pelanggan, Shift, Laporan, Pengaturan (tab Perangkat, Printer, Toko & cabang, Promo poin & ongkir, Perangkai, Survei, Pengguna, Email, Impor), Setup.
 - `app/android/app/src/main/java/id/kasirbuket/app/ThermalPrinterPlugin.java` — plugin native: `listPaired`, `printBluetooth` (SPP), `printTcp` (port 9100).
 - `tools/ekspor-kasirpintar.js` — skrip Console untuk ekspor data dari back office Kasir Pintar.
 - `.github/workflows/android.yml` — build APK debug (kunci tetap `app/android/app/debug.keystore`).
@@ -44,8 +45,12 @@ Selalu jalankan `server: npm test`, `app: npm test && npm run build`, dan `node 
 10. **ID rekaman** cocok `/^[A-Za-z0-9_-]{4,64}$/`. Impor Kasir Pintar memakai ID deterministik (`kp-`, `kpo-`, `kpp-`) agar impor ulang idempoten.
 11. **Teks cetak ASCII saja** (`toAscii`), 58 mm = 32 kolom, 80 mm = 48 kolom. Tiket produksi tidak boleh memuat harga.
 12. **Pengaturan bawaan** (perangkai, ongkir, poin, pop-up) ada di `app/src/lib/settings.ts` (`storeCfg`); pengaturan lama tanpa kolom baru tetap jalan. Poin disimpan per transaksi (`points_earned`, `points_redeemed`), saldo = Σ didapat − Σ ditukar, sehingga bebas konflik antarperangkat.
-13. **Lokasi**: `app/src/lib/geo.ts` (parse link Maps/Plus Code/koordinat, haversine, rumus ongkir) dan `server/src/geo.js` (`/api/geo/expand` hanya domain Google, `/api/geo/route` OSRM; fallback klien garis lurus × 1,3).
+13. **Lokasi & ongkir**: `app/src/lib/geo.ts` (parse link Maps/Plus Code/koordinat, rumus ongkir) dan `server/src/geo.js`. `/api/geo/route` = OpenRouteService (kunci di kv `geo`, owner via `/api/geo-config`, tidak pernah dikirim balik utuh) lalu OSRM; bila keduanya gagal 502 dan kasir mengisi km manual. **Tidak ada perkiraan garis lurus.**
 14. Server tetap **tanpa dependensi npm**. Folder `data/` (basis data) wajib tetap di `.gitignore`.
+15. **Kode perangkat** = jenis (K/H/T) + fungsi (K/R/O), duplikat diberi angka (KK2). Semua kode yang pernah dipakai tercatat di tabel `device_codes` dan tidak diberikan ke perangkat lain. `nextOrderNo` hanya menghitung nomor milik `device_id` sendiri (awalan KK juga cocok dengan KK2).
+16. **Notifikasi perangkai**: hanya server yang mengirim (setelah push `orders`). Keadaan per (pesanan, email) di `cal_events`; email perangkai di kv `notify` (tidak ikut sinkron). Perubahan yang tidak memengaruhi isi undangan (status produksi, pembayaran) tidak mengirim email. Ganti perangkai = CANCEL lama + REQUEST baru; batal = CANCEL; UID tetap, SEQUENCE naik. Undangan tidak memuat harga.
+17. **Survei**: jawaban disimpan `order.survey[id pertanyaan]`; data v1.2 memakai teks pertanyaan sebagai kunci (`answerOf` membaca keduanya).
+18. **Tata letak**: isi halaman dibatasi `--maxw` (1240 px; Kasir & Produksi 1680 px). Tabel memakai grid dengan `--cols`/`--cols-sm` per tabel; daftar label–nilai memakai `.dl`.
 
 ## Batasan lingkungan
 - Android SDK/Gradle tidak tersedia di container (dl.google.com, maven.google.com diblokir). APK dibangun oleh GitHub Actions atau Android Studio di PC pengguna. Perubahan Java cukup dicek dengan `javac` terhadap stub API.
@@ -59,7 +64,7 @@ Selalu jalankan `server: npm test`, `app: npm test && npm run build`, dan `node 
 - Gaya komunikasi dengan Vano: lugas, teknis/matematis, singkatan diberi kepanjangan di awal, istilah dijelaskan di akhir, tampilkan langkah hitung dan rekonsiliasi, hindari penghubung " —".
 
 ## Status & backlog
-Versi 1.0 selesai dan seluruh uji lulus. Kandidat berikutnya (belum dikerjakan):
+Versi 1.3 selesai dan seluruh uji lulus (notifikasi & kalender perangkai, ORS, bank survei, kode perangkat, tata letak layar lebar, perbaikan HPP impor). Belum teruji dengan layanan sungguhan dari container: Gmail/Google Calendar, OpenRouteService, link pendek Google Maps. Kandidat berikutnya (belum dikerjakan):
 1. Resep bahan baku (BOM) per buket untuk memotong stok bahan otomatis.
 2. Struk digital via WhatsApp.
 3. QRIS dinamis via payment gateway.

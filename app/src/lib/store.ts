@@ -90,7 +90,12 @@ export async function nextOrderNo(date = new Date()): Promise<string> {
   let seq = (await getMeta<number>(key, 0)) + 1;
   const prefix = `${day}-${code}`;
   const existing = await db.orders.where('no').startsWith(prefix).toArray();
-  for (const o of existing) seq = Math.max(seq, Number(o.no.slice(prefix.length)) + 1 || seq);
+  for (const o of existing) {
+    // hanya nomor milik perangkat ini: "261115-KK2001" (perangkat KK2) juga berawalan "261115-KK"
+    if (o.device_id && o.device_id !== getSession().deviceId) continue;
+    const m = o.no.slice(prefix.length).match(/^\d{3,}$/);
+    if (m) seq = Math.max(seq, Number(m[0]) + 1);
+  }
   await setMeta(key, seq);
   return `${prefix}${String(seq).padStart(3, '0')}`;
 }

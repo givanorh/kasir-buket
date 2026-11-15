@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../lib/db';
-import { rp } from '../lib/format';
-import { getDeviceConfig, newId, save, stockLevels } from '../lib/store';
+import { num, rp } from '../lib/format';
+import { getDeviceConfig, newId, save, saveMany, stockLevels } from '../lib/store';
 import { Empty, Field, Modal, MoneyInput, Seg, toast } from '../components/ui';
 import type { Category, Product, ProductType, StockMove } from '../lib/types';
 
@@ -21,6 +21,19 @@ export default function Produk() {
     const s = q.toLowerCase();
     return products.filter((p) => !p.deleted && (!s || p.name.toLowerCase().includes(s) || (p.sku || '').toLowerCase().includes(s))).sort((a, b) => a.name.localeCompare(b.name));
   }, [products, q]);
+  // Impor v1.0–1.2 membaca "harga_modal" Kasir Pintar yang ternyata = HPP satuan × stok. HPP asli = nilai itu ÷ stok awal impor.
+  const importMoves = useLiveQuery(() => db.stock_moves.filter((m) => m.reason === 'impor').toArray(), []) || [];
+  const fixes = useMemo(() => products.flatMap((p) => {
+    if (!p.id.startsWith('kp-') || !(p.cost > p.price) || p.price <= 0) return [];
+    const m = importMoves.find((x) => x.product_id === p.id);
+    if (!m || m.qty <= 1 || p.cost % m.qty !== 0) return [];
+    const unit = p.cost / m.qty;
+    return unit <= p.price ? [{ p, stok: m.qty, unit }] : [];
+  }), [products, importMoves]);
+  async function applyFixes() {
+    await saveMany(fixes.map((f) => ({ c: 'products' as const, id: f.p.id, patch: { cost: f.unit } })));
+    toast(`HPP ${fixes.length} produk diperbaiki`);
+  }
 
   return (
     <div className="page">
@@ -29,25 +42,32 @@ export default function Produk() {
         <button className="btn" onClick={() => setCats(true)}>Kategori</button>
         <button className="btn primary" onClick={() => setEdit({ id: '', name: '', type: 'buket', price: 0, cost: 0, active: true, category_id: categories[0]?.id })} data-testid="btn-produk-baru">＋ Produk</button>
       </div>
-      <div className="table">
-        <div className="thead"><div className="grow">Nama</div><div className="hide-sm">Kategori</div><div className="right">Harga</div><div className="right hide-sm">HPP</div><div className="right hide-sm">Margin</div><div className="right">Stok</div></div>
+      {fixes.length > 0 && (
+        <div className="note warn" data-testid="fix-hpp">
+          <b>{fixes.length} produk hasil impor punya HPP lebih besar dari harga jual.</b> Penyebab: impor lama membaca nilai modal total (HPP × stok) dari Kasir Pintar. Contoh: {fixes[0].p.name}: {rp(fixes[0].p.cost)} ÷ stok {num(fixes[0].stok)} = {rp(fixes[0].unit)} per unit.
+          <div style={{ marginTop: 8 }}><button className="btn small primary" onClick={applyFixes}>Perbaiki HPP {fixes.length} produk</button></div>
+        </div>
+      )}
+      <div className="table" style={{ ['--cols' as string]: 'minmax(0,1fr) 150px 120px 170px 80px 90px', ['--cols-sm' as string]: 'minmax(0,1fr) auto 64px' }}>
+        <div className="thead"><div>Nama</div><div className="hide-sm">Kategori</div><div className="right">Harga</div><div className="right hide-sm">HPP</div><div className="right hide-sm">Margin</div><div className="right">Stok</div></div>
         {list.map((p) => {
+          const bad = p.cost > p.price && p.price > 0;
           const margin = p.price ? ((p.price - p.cost) / p.price) * 100 : 0;
           const st = stock.get(p.id) || 0;
           return (
             <div key={p.id} className={`trow ${p.active === false ? 'void' : ''}`}>
-              <button className="grow linkish" onClick={() => setEdit(p)}><b>{p.name}</b><div className="muted">{TYPE_LABEL[p.type]}{p.sku ? ` · ${p.sku}` : ''}</div></button>
-              <div className="hide-sm">{catName(p.category_id)}</div>
+              <button className="linkish" onClick={() => setEdit(p)}><b>{p.name}</b><div className="muted">{TYPE_LABEL[p.type]}{p.sku ? ` · ${p.sku}` : ''}</div></button>
+              <div className="hide-sm muted">{catName(p.category_id)}</div>
               <div className="right">{rp(p.price)}</div>
-              <div className="right hide-sm">{rp(p.cost)}</div>
-              <div className={`right hide-sm ${margin < 30 ? 'red' : ''}`}>{margin.toFixed(0)}%</div>
-              <div className="right">{p.track_stock ? <button className={`btn small ${st <= (p.min_stock || 0) ? 'danger' : ''}`} onClick={() => setAdj(p)}>{st}</button> : <span className="muted">—</span>}</div>
+              <div className={`right hide-sm ${bad ? 'red' : p.cost ? '' : 'muted'}`}>{p.cost ? rp(p.cost) : 'belum diisi'}</div>
+              <div className={`right hide-sm ${bad || margin < 30 ? 'red' : ''}`}>{bad ? 'cek HPP' : p.cost ? `${margin.toFixed(0)}%` : '—'}</div>
+              <div className="right">{p.track_stock ? <button className={`btn small ${st <= (p.min_stock || 0) ? 'danger' : ''}`} onClick={() => setAdj(p)}>{num(st)}</button> : <span className="muted">—</span>}</div>
             </div>
           );
         })}
         {!list.length && <Empty>Belum ada produk.</Empty>}
       </div>
-      <p className="muted small">Margin = (harga − HPP) ÷ harga. Merah bila di bawah 30%.</p>
+      <p className="muted small">Margin = (harga − HPP) ÷ harga. Merah bila di bawah 30% atau HPP lebih besar dari harga jual.</p>
       {edit && <ProductForm p={edit} categories={categories} onClose={() => setEdit(null)} />}
       {adj && <StockAdjust p={adj} current={stock.get(adj.id) || 0} onClose={() => setAdj(null)} />}
       {cats && <CategoryManager categories={categories} onClose={() => setCats(false)} />}

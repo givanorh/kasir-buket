@@ -39,23 +39,40 @@ test('setup awal hanya sekali', async () => {
   assert.equal((await json('GET', '/api/health')).body.needsSetup, false);
 });
 
-test('login, kode perangkat unik, dan sandi salah ditolak', async () => {
+test('login, kode perangkat bermakna & unik, dan sandi salah ditolak', async () => {
   assert.equal((await json('POST', '/api/auth/login', { username: 'vano', password: 'salah' })).status, 401);
-  const a = await json('POST', '/api/auth/login', { username: 'vano', password: 'rahasia1', deviceId: 'dev-kasir-1', deviceName: 'Tablet Kasir' });
+  const a = await json('POST', '/api/auth/login', { username: 'vano', password: 'rahasia1', deviceId: 'dev-kasir-1', deviceKind: 'K', deviceFn: 'K' });
   assert.equal(a.status, 200);
   owner = a.body.token;
-  assert.equal(a.body.device.code, 'A');
+  assert.equal(a.body.device.code, 'KK');
+  assert.equal(a.body.device.name, 'Komputer Kasir');
   const b = await json('POST', '/api/auth/login', { username: 'vano', password: 'rahasia1', deviceId: 'dev-kasir-1' });
-  assert.equal(b.body.device.code, 'A', 'perangkat sama mempertahankan kodenya');
+  assert.equal(b.body.device.code, 'KK', 'perangkat sama mempertahankan kodenya');
+  const old = await json('POST', '/api/auth/login', { username: 'vano', password: 'rahasia1', deviceId: 'dev-lama-1', deviceName: 'Tablet Kasir' });
+  assert.equal(old.body.device.code, 'TK', 'aplikasi versi lama: jenis ditebak dari nama perangkat');
+  const twin = await json('POST', '/api/auth/login', { username: 'vano', password: 'rahasia1', deviceId: 'dev-kasir-3', deviceKind: 'K', deviceFn: 'K' });
+  assert.equal(twin.body.device.code, 'KK2', 'komputer kasir kedua mendapat KK2');
+});
+
+test('ubah jenis/fungsi perangkat: kode baru, kode lama tidak diberikan ke perangkat lain', async () => {
+  const t = (await json('POST', '/api/auth/login', { username: 'vano', password: 'rahasia1', deviceId: 'dev-kasir-3', deviceKind: 'K', deviceFn: 'K' })).body.token;
+  assert.equal((await json('POST', '/api/devices/code', { kind: 'X', fn: 'K' }, t)).status, 400);
+  const r = await json('POST', '/api/devices/code', { kind: 'T', fn: 'K' }, t);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.device.code, 'TK2', 'TK sudah dipakai tablet lain');
+  const n = await json('POST', '/api/auth/login', { username: 'vano', password: 'rahasia1', deviceId: 'dev-kasir-4', deviceKind: 'K', deviceFn: 'K' });
+  assert.equal(n.body.device.code, 'KK3', 'KK2 dicadangkan untuk perangkat yang dulu memakainya');
+  const back = await json('POST', '/api/devices/code', { kind: 'K', fn: 'K' }, t);
+  assert.equal(back.body.device.code, 'KK2', 'perangkat boleh kembali ke kode lamanya sendiri');
 });
 
 test('owner membuat staf; staf tersalin ke koleksi staff', async () => {
   assert.equal((await json('POST', '/api/users', { name: 'Kasir 1', username: 'kasir1', password: 'kasir123', role: 'kasir' }, owner)).status, 200);
   assert.equal((await json('POST', '/api/users', { name: 'Perangkai 1', username: 'rangkai1', password: 'rangkai1', role: 'perangkai' }, owner)).status, 200);
   kasir = (await json('POST', '/api/auth/login', { username: 'kasir1', password: 'kasir123', deviceId: 'dev-kasir-2' })).body.token;
-  const p = await json('POST', '/api/auth/login', { username: 'rangkai1', password: 'rangkai1', deviceId: 'dev-produksi' });
+  const p = await json('POST', '/api/auth/login', { username: 'rangkai1', password: 'rangkai1', deviceId: 'dev-produksi', deviceKind: 'H', deviceFn: 'R' });
   perangkai = p.body.token;
-  assert.equal(p.body.device.code, 'C');
+  assert.equal(p.body.device.code, 'HR');
   assert.equal((await json('POST', '/api/users', { name: 'X', username: 'xx1', password: 'xxxxxx' }, kasir)).status, 403);
   const pull = await json('GET', '/api/sync/pull?since=0', null, kasir);
   assert.equal(pull.body.changes.filter((c) => c.c === 'staff').length, 3);

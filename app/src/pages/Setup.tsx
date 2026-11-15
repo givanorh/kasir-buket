@@ -1,6 +1,7 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { api, getSession, isNative, login, updateSession } from '../lib/session';
-import { Field, toast } from '../components/ui';
+import { Field, Seg, toast } from '../components/ui';
+import { FN_OPTIONS, KIND_OPTIONS, codeMeaning, guessKind, type DeviceFn, type DeviceKind } from '../lib/device';
 import { Icon } from '../components/icons';
 import { getDeviceConfig, setDeviceConfig } from '../lib/store';
 
@@ -24,8 +25,9 @@ export default function Setup() {
   const [mode, setMode] = useState<'login' | 'lupa' | 'kode'>('login');
   const [f, setF] = useState({
     storeName: '', address: '', phone: '', ownerName: '', email: '', username: '', password: '',
-    deviceName: isNative() ? 'HP Kasir' : 'Komputer Kasir', code: '', newPassword: '', newPassword2: '',
+    code: '', newPassword: '', newPassword2: '',
   });
+  const [dev, setDev] = useState<{ kind: DeviceKind; fn: DeviceFn }>(() => ({ kind: guessKind(), fn: 'K' }));
   const set = (k: keyof typeof f) => (e: ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
 
   async function check(url = server) {
@@ -51,11 +53,18 @@ export default function Setup() {
 
   const doSetup = run(async () => {
     await api('/api/setup', { body: f });
-    const r = await login(f.username, f.password, f.deviceName, confirmDiscard);
+    const r = await login(f.username, f.password, dev, confirmDiscard);
     await followOutlet(r.user.outlet_id);
     toast('Toko siap digunakan');
   });
-  const doLogin = run(async () => { const r = await login(f.username, f.password, f.deviceName, confirmDiscard); await followOutlet(r.user.outlet_id); });
+  const doLogin = run(async () => { const r = await login(f.username, f.password, dev, confirmDiscard); await followOutlet(r.user.outlet_id); });
+  const devicePicker = (
+    <div className="devpick">
+      <Field group label="Jenis perangkat ini"><Seg value={dev.kind} onChange={(kind) => setDev({ ...dev, kind })} options={KIND_OPTIONS} /></Field>
+      <Field group label="Dipakai untuk"><Seg value={dev.fn} onChange={(fn) => setDev({ ...dev, fn })} options={FN_OPTIONS} /></Field>
+      <div className="field-hint" data-testid="kode-preview">Kode nomor struk: <b>{dev.kind}{dev.fn}</b> ({codeMeaning(dev.kind + dev.fn)}); bila sudah dipakai perangkat lain menjadi {dev.kind}{dev.fn}2.</div>
+    </div>
+  );
   const doForgot = run(async () => {
     const r = await api<{ message: string; to?: string }>('/api/auth/forgot', { body: { username: f.username } });
     toast(r.to ? `Kode dikirim ke ${r.to}` : r.message, 'info');
@@ -92,7 +101,7 @@ export default function Setup() {
             <Field label="Email pemilik" hint="Untuk menerima kode bila lupa kata sandi"><input type="email" value={f.email} onChange={set('email')} autoCapitalize="none" /></Field>
             <Field label="Username"><input required value={f.username} onChange={set('username')} autoCapitalize="none" autoComplete="off" /></Field>
             <Field label="Kata sandi (min. 6)"><input required type="password" minLength={6} value={f.password} onChange={set('password')} autoComplete="new-password" /></Field>
-            <Field label="Nama perangkat ini"><input value={f.deviceName} onChange={set('deviceName')} /></Field>
+            {devicePicker}
             <button className="btn primary big" disabled={busy}>{busy ? 'Menyiapkan…' : 'Siapkan toko'}</button>
           </form>
         )}
@@ -100,7 +109,7 @@ export default function Setup() {
           <form onSubmit={doLogin} className="stack">
             <Field label="Username"><input required value={f.username} onChange={set('username')} autoCapitalize="none" autoComplete="username" /></Field>
             <Field label="Kata sandi"><input required type="password" value={f.password} onChange={set('password')} autoComplete="current-password" /></Field>
-            <Field label="Nama perangkat ini" hint="Mis. HP Kasir, Tablet Ruang Rangkai"><input value={f.deviceName} onChange={set('deviceName')} /></Field>
+            {devicePicker}
             <button className="btn primary big" disabled={busy}>{busy ? 'Masuk…' : 'Masuk'}</button>
             <button type="button" className="linkish center" onClick={() => setMode('lupa')} data-testid="lupa-sandi">Lupa kata sandi?</button>
           </form>

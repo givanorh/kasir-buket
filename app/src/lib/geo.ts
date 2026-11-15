@@ -92,9 +92,6 @@ export function haversineKm(a: LatLng, b: LatLng): number {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-/** Faktor jalan bila rute jalan tidak tersedia: jarak jalan ≈ 1,3 × garis lurus. */
-export const ROAD_FACTOR = 1.3;
-
 export interface FeeRule { rate: number; min: number; round: number }
 export interface FeeResult { kmBilled: number; raw: number; fee: number; usedMin: boolean }
 

@@ -16,8 +16,9 @@ import Laporan from './pages/Laporan';
 import ShiftPage from './pages/Shift';
 import Pengaturan from './pages/Pengaturan';
 import type { Role } from './lib/types';
+import { ROLE_LABEL } from './lib/labels';
 
-export const ROLE_LABEL: Record<Role, string> = { owner: 'Owner', kasir: 'Admin', perangkai: 'Perangkai' };
+export { ROLE_LABEL };
 
 const PAGES: { key: string; label: string; roles: Role[]; el: () => ReactElement }[] = [
   { key: 'kasir', label: 'Kasir', roles: ['owner', 'kasir'], el: () => <Kasir /> },
@@ -126,7 +127,7 @@ function Shell() {
           <a key={p.key} href={`#/${p.key}`} className={p === page ? 'on' : ''}><Icon name={p.key} /><span>{p.label}</span></a>
         ))}
       </nav>
-      <div className="main">
+      <div className={`main ${page.key === 'kasir' || page.key === 'produksi' ? 'wide' : ''}`}>
         <header className="top">
           <h1>{page.label}</h1>
           <div className="top-r">

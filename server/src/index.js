@@ -3,6 +3,9 @@
 // - GET /api/sync/pull?since=N, POST /api/sync/push   (sinkron berbasis nomor urut/seq server)
 // - GET /api/events?token=...                          (SSE: memberi tahu perangkat ada perubahan)
 // - GET/POST/PATCH /api/users                          (khusus owner)
+// - GET/POST /api/notify, POST /api/notify/test         (notifikasi & kalender perangkai, khusus owner)
+// - GET/POST /api/geo-config, POST /api/geo/route       (ongkir: OpenRouteService, cadangan OSRM)
+// - POST /api/devices/code                             (ubah jenis/fungsi perangkat -> kode nomor struk)
 // - selain /api: menyajikan aplikasi web (folder app/dist)
 import http from 'node:http';
 import fs from 'node:fs';
@@ -12,13 +15,17 @@ import { fileURLToPath } from 'node:url';
 import { openDb, backup } from './db.js';
 import { hashPassword, verifyPassword, signToken, verifyToken, createLimiter } from './auth.js';
 import { sendMail } from './smtp.js';
-import { expandMapsUrl, roadDistanceKm } from './geo.js';
+import { expandMapsUrl, roadDistanceKm, orsDistanceKm } from './geo.js';
+import { createNotifier } from './notify.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const VERSION = '1.2.0';
+export const VERSION = '1.3.0';
 
 const ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
 const ROLES = ['owner', 'kasir', 'perangkai'];
+// Kode perangkat = jenis + fungsi, mis. KK = Komputer Kasir. Bila sudah dipakai perangkat lain: KK2, KK3, ...
+export const DEVICE_KIND = { K: 'Komputer', H: 'HP', T: 'Tablet' };
+export const DEVICE_FN = { K: 'Kasir', R: 'Ruang Rangkai', O: 'Owner' };
 
 // Aturan tulis per koleksi. `fields` membatasi kolom yang boleh diubah peran tertentu.
 const RULES = {
@@ -50,6 +57,7 @@ export function createServer(opts = {}) {
   const sendMailFn = opts.sendMail || sendMail;
   const fetchFn = opts.fetch || fetch;
   const osrmBase = opts.osrmUrl || process.env.OSRM_URL || 'https://router.project-osrm.org';
+  const orsBase = opts.orsUrl || process.env.ORS_URL || 'https://api.openrouteservice.org';
   const sseClients = new Set();
 
   const q = {
@@ -69,7 +77,10 @@ export function createServer(opts = {}) {
     bumpCode: db.prepare('UPDATE reset_codes SET attempts = attempts + 1 WHERE user_id = ?'),
     delCode: db.prepare('DELETE FROM reset_codes WHERE user_id = ?'),
     deviceById: db.prepare('SELECT * FROM devices WHERE id = ?'),
-    deviceCodes: db.prepare('SELECT code FROM devices'),
+    codeOwner: db.prepare('SELECT device_id FROM device_codes WHERE code = ?'),
+    codeOnDevice: db.prepare('SELECT id FROM devices WHERE code = ?'),
+    reserveCode: db.prepare('INSERT OR IGNORE INTO device_codes (code, device_id, created_at) VALUES (?, ?, ?)'),
+    setDeviceCode: db.prepare('UPDATE devices SET code = ?, name = ? WHERE id = ?'),
     insertDevice: db.prepare('INSERT INTO devices (id, code, name, user_id, outlet_id, created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)'),
     touchDevice: db.prepare('UPDATE devices SET last_seen = ?, user_id = ?, name = COALESCE(?, name) WHERE id = ?'),
   };
@@ -96,12 +107,38 @@ export function createServer(opts = {}) {
     writeRecord('staff', u.id, { name: u.name, username: u.username, role: u.role, active: !!u.active, outlet_id: u.outlet_id || null }, null);
   }
 
-  function nextDeviceCode() {
-    const used = new Set(q.deviceCodes.all().map((r) => r.code));
-    const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // tanpa I dan O agar tidak tertukar dengan 1 dan 0
-    for (const a of letters) if (!used.has(a)) return a;
-    for (const a of letters) for (const b of letters) if (!used.has(a + b)) return a + b;
-    throw new Error('Kode perangkat habis');
+  /** Jenis & fungsi dari pilihan layar masuk; perangkat versi lama ditebak dari namanya. */
+  function deviceBase(body) {
+    let kind = String(body.deviceKind || '').toUpperCase();
+    let fn = String(body.deviceFn || '').toUpperCase();
+    const name = String(body.deviceName || '');
+    if (!DEVICE_KIND[kind]) kind = /tablet|tab\b/i.test(name) ? 'T' : /\bhp\b|handphone|android|ponsel/i.test(name) ? 'H' : 'K';
+    if (!DEVICE_FN[fn]) fn = /rangkai|produksi|florist/i.test(name) ? 'R' : /owner|pemilik/i.test(name) ? 'O' : 'K';
+    return { base: kind + fn, label: `${DEVICE_KIND[kind]} ${DEVICE_FN[fn]}` };
+  }
+  /** Kode bebas pertama: KK, KK2, KK3, ... Kode yang pernah dipakai perangkat lain tidak diberikan lagi. */
+  function allocCode(base, deviceId) {
+    for (let i = 1; i < 1000; i++) {
+      const code = i === 1 ? base : `${base}${i}`;
+      const owner = q.codeOwner.get(code)?.device_id;
+      const holder = q.codeOnDevice.get(code)?.id;
+      if ((!owner || owner === deviceId) && (!holder || holder === deviceId)) return code;
+    }
+    throw new HttpError(409, 'Kode perangkat habis');
+  }
+  const sameBase = (code, base) => new RegExp(`^${base}\\d*$`).test(code || '');
+  /** Pasang kode baru (bila jenis/fungsi berubah) dan cerminkan ke koleksi `devices`. Panggil di dalam transaksi. */
+  function applyDeviceCode(dev, base, label, userId) {
+    if (!sameBase(dev.code, base)) {
+      const code = allocCode(base, dev.id);
+      q.setDeviceCode.run(code, label, dev.id);
+      q.reserveCode.run(code, dev.id, now());
+    } else if (dev.name !== label) {
+      q.setDeviceCode.run(dev.code, label, dev.id);
+    }
+    const d = q.deviceById.get(dev.id);
+    writeRecord('devices', d.id, { code: d.code, name: d.name, user_id: userId, outlet_id: d.outlet_id, last_seen: d.last_seen }, userId);
+    return d;
   }
 
   function broadcast() {
@@ -165,6 +202,98 @@ export function createServer(opts = {}) {
   function storeName() {
     const r = q.getRec.get('settings', 'toko');
     return r ? JSON.parse(r.data).store_name || 'Kasir Buket' : 'Kasir Buket';
+  }
+
+  function storeInfo(order) {
+    const st = q.getRec.get('settings', 'toko');
+    const s = st ? JSON.parse(st.data) : {};
+    const out = order?.outlet_id ? q.getRec.get('outlets', order.outlet_id) : null;
+    const o = out ? JSON.parse(out.data) : {};
+    return { storeName: s.store_name || 'Kasir Buket', address: o.address || s.address || '' };
+  }
+  const notifier = createNotifier({
+    store, sendMail: (cfg, msg) => sendMailFn(cfg, msg), smtpConfig: emailConfig, storeInfo,
+    now: opts.now, delayMs: opts.notifyDelayMs ?? Number(process.env.NOTIFY_DELAY_MS ?? 15000),
+  });
+
+  function handleNotify(user, method, parts, body) {
+    if (user.role !== 'owner') throw new HttpError(403, 'Khusus owner');
+    const view = () => {
+      const c = notifier.config();
+      const smtp = emailConfig();
+      return {
+        enabled: c.enabled, leadMinutes: c.leadMinutes,
+        contacts: Object.entries(c.contacts).map(([name, email]) => ({ name, email })),
+        smtp: { configured: !!smtp?.host, from: smtp?.from || null },
+        jobs: notifier.recent(30),
+      };
+    };
+    if (method === 'GET') return view();
+    if (method === 'POST' && parts[2] === 'test') return notifier.test(String(body.name || ''), !!body.cancel).catch((e) => { throw new HttpError(e.status || 502, e.status ? e.message : `Gagal mengirim: ${e.message}`); });
+    if (method === 'POST') {
+      const cur = notifier.config();
+      const contacts = {};
+      for (const c of Array.isArray(body.contacts) ? body.contacts : []) {
+        const name = String(c?.name || '').trim();
+        if (!name) continue;
+        const email = normEmail(c.email);
+        if (email) contacts[name] = email;
+      }
+      const lead = Number(body.leadMinutes ?? cur.leadMinutes);
+      notifier.setConfig({
+        enabled: typeof body.enabled === 'boolean' ? body.enabled : cur.enabled,
+        leadMinutes: Number.isFinite(lead) ? Math.min(24 * 60, Math.max(15, Math.round(lead))) : 60,
+        contacts,
+      });
+      notifier.reconcileAll();
+      return view();
+    }
+    throw new HttpError(405, 'Metode tidak didukung');
+  }
+
+  // ---------- ongkir: kunci OpenRouteService disimpan di server saja ----------
+  function geoConfig() {
+    try { return JSON.parse(store.kvGet('geo') || 'null') || {}; } catch { return {}; }
+  }
+  async function routeKm(from, to) {
+    const key = geoConfig().orsKey;
+    const errors = [];
+    if (key) {
+      try { return { ...(await orsDistanceKm(from, to, { fetchFn, key, base: orsBase })), source: 'ors' }; }
+      catch (e) { if (e.status === 400) throw e; errors.push(e.message); }
+    }
+    try { return { km: await roadDistanceKm(from, to, { fetchFn, base: osrmBase }), source: 'osrm' }; }
+    catch (e) { if (e.status === 400) throw e; errors.push(`OSRM: ${e.message}`); }
+    throw new HttpError(502, `Rute jalan tidak dapat dihitung (${errors.join('; ')}). Isi jarak km secara manual.`);
+  }
+  async function handleGeoConfig(user, method, parts, body) {
+    if (user.role !== 'owner') throw new HttpError(403, 'Khusus owner');
+    const view = () => { const k = geoConfig().orsKey || ''; return { hasOrsKey: !!k, keyHint: k ? `…${k.slice(-4)}` : '' }; };
+    if (method === 'GET') return view();
+    if (method === 'POST' && parts[2] === 'test') {
+      const from = body.from;
+      if (!from) throw new HttpError(400, 'Simpan lokasi toko dulu');
+      const r = await routeKm(from, { lat: Number(from.lat) + 0.02, lng: Number(from.lng) + 0.02 });
+      return { ok: true, ...r };
+    }
+    if (method === 'POST') {
+      const k = String(body.orsKey ?? '').trim();
+      if (k && !/^[A-Za-z0-9=_.-]{20,400}$/.test(k)) throw new HttpError(400, 'Format kunci OpenRouteService tidak dikenali');
+      store.kvSet('geo', JSON.stringify({ ...geoConfig(), orsKey: k }));
+      return view();
+    }
+    throw new HttpError(405, 'Metode tidak didukung');
+  }
+
+  function handleDeviceCode(user, body) {
+    const dev = q.deviceById.get(user.deviceId);
+    if (!dev) throw new HttpError(404, 'Perangkat tidak dikenal, silakan masuk ulang');
+    const kind = String(body.kind || '').toUpperCase(), fn = String(body.fn || '').toUpperCase();
+    if (!DEVICE_KIND[kind] || !DEVICE_FN[fn]) throw new HttpError(400, 'Jenis atau fungsi perangkat tidak dikenal');
+    let d;
+    store.tx(() => { d = applyDeviceCode(dev, kind + fn, `${DEVICE_KIND[kind]} ${DEVICE_FN[fn]}`, user.id); });
+    broadcast();
+    return { device: { id: d.id, code: d.code, name: d.name, outlet_id: d.outlet_id } };
   }
 
   async function handleForgot(body, req) {
@@ -293,14 +422,20 @@ export function createServer(opts = {}) {
     limiter.reset(key);
     let deviceId = ID_RE.test(body.deviceId || '') ? body.deviceId : newId();
     let dev = q.deviceById.get(deviceId);
+    const { base, label } = deviceBase(body);
+    const explicit = !!(body.deviceKind && body.deviceFn);
     store.tx(() => {
       if (!dev) {
-        q.insertDevice.run(deviceId, nextDeviceCode(), body.deviceName || 'Perangkat', u.id, u.outlet_id, now(), now());
+        const code = allocCode(base, deviceId);
+        q.insertDevice.run(deviceId, code, label, u.id, u.outlet_id, now(), now());
+        q.reserveCode.run(code, deviceId, now());
       } else {
-        q.touchDevice.run(now(), u.id, body.deviceName || null, deviceId);
+        q.touchDevice.run(now(), u.id, null, deviceId);
       }
       dev = q.deviceById.get(deviceId);
-      writeRecord('devices', dev.id, { code: dev.code, name: dev.name, user_id: u.id, outlet_id: dev.outlet_id, last_seen: dev.last_seen }, u.id);
+      // jenis/fungsi dipilih di layar masuk: kode ikut berubah bila berbeda (kode lama tetap dicadangkan)
+      dev = explicit ? applyDeviceCode(dev, base, label, u.id) : dev;
+      if (!explicit) writeRecord('devices', dev.id, { code: dev.code, name: dev.name, user_id: u.id, outlet_id: dev.outlet_id, last_seen: dev.last_seen }, u.id);
     });
     broadcast();
     const token = signToken(store.secret, { u: u.id, d: deviceId, r: u.role }, tokenDays);
@@ -349,6 +484,10 @@ export function createServer(opts = {}) {
       }
     });
     if (results.some((r) => r.seq)) broadcast();
+    for (const r of results) {
+      if (r.c !== 'orders' || !r.seq) continue;
+      try { notifier.reconcileById(r.id); } catch (e) { console.error('Notifikasi perangkai:', e.message); }
+    }
     return { results, head: store.state.seq };
   }
 
@@ -460,9 +599,15 @@ export function createServer(opts = {}) {
       }
       if (route === 'POST /api/geo/route') {
         const b = await readJson(req);
-        try { return send(res, 200, { km: await roadDistanceKm(b.from, b.to, { fetchFn, base: osrmBase }), source: 'osrm' }); }
-        catch (e) { throw new HttpError(e.status === 400 ? 400 : 502, e.status ? e.message : 'Layanan rute tidak dapat dihubungi'); }
+        try { return send(res, 200, await routeKm(b.from, b.to)); }
+        catch (e) { throw e instanceof HttpError ? e : new HttpError(e.status === 400 ? 400 : 502, e.message || 'Layanan rute tidak dapat dihubungi'); }
       }
+      if (parts[1] === 'geo-config') {
+        try { return send(res, 200, await handleGeoConfig(user, req.method, parts, req.method === 'GET' ? {} : await readJson(req))); }
+        catch (e) { throw e instanceof HttpError ? e : new HttpError(e.status === 400 ? 400 : 502, e.message); }
+      }
+      if (parts[1] === 'notify') return send(res, 200, await handleNotify(user, req.method, parts, req.method === 'GET' ? {} : await readJson(req)));
+      if (route === 'POST /api/devices/code') return send(res, 200, handleDeviceCode(user, await readJson(req)));
       if (parts[1] === 'email-config') return send(res, 200, await handleEmailConfig(user, req.method, parts, req.method === 'GET' ? {} : await readJson(req)));
       if (parts[1] === 'users') return send(res, 200, handleUsers(user, req.method, parts, req.method === 'GET' ? {} : await readJson(req)));
       throw new HttpError(404, 'Endpoint tidak ditemukan');
@@ -474,11 +619,12 @@ export function createServer(opts = {}) {
   });
 
   const heartbeat = setInterval(() => { for (const r of sseClients) r.write(': ping\n\n'); }, 25000);
+  const notifyTimer = opts.noNotifyTimer ? null : setInterval(() => { notifier.tick().catch((e) => console.error('Notifikasi:', e.message)); }, Number(process.env.NOTIFY_INTERVAL_MS || 5000));
   const runBackup = () => { try { backup(store, dataDir); } catch (e) { console.error('Backup gagal:', e.message); } };
   const backupTimer = opts.noBackup ? null : setInterval(runBackup, 24 * 3600 * 1000);
   if (!opts.noBackup) runBackup();
-  server.on('close', () => { clearInterval(heartbeat); if (backupTimer) clearInterval(backupTimer); for (const r of sseClients) r.end(); });
-  return { server, store };
+  server.on('close', () => { clearInterval(heartbeat); if (notifyTimer) clearInterval(notifyTimer); if (backupTimer) clearInterval(backupTimer); for (const r of sseClients) r.end(); });
+  return { server, store, notifier };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

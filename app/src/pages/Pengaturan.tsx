@@ -1,28 +1,34 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, getMeta } from '../lib/db';
-import { api, isNative, logout, useSession } from '../lib/session';
+import { api, changeDeviceCode, isNative, logout, useSession } from '../lib/session';
 import { sync, useSyncStatus } from '../lib/sync';
 import { getDeviceConfig, newId, save, setDeviceConfig, type DeviceConfig, type PrinterConfig, type PrinterMode } from '../lib/store';
 import { sendToPrinter, ThermalPrinter } from '../lib/print';
 import { buildTest } from '../lib/print/receipts';
 import { planImport, runImport, type ImportPlan } from '../lib/kasirpintar';
-import { Badge, Field, MoneyInput, Seg, toast } from '../components/ui';
+import { Badge, Empty, Field, Modal, MoneyInput, Seg, toast } from '../components/ui';
 import { Icon } from '../components/icons';
-import { storeCfg } from '../lib/settings';
+import { DEFAULT_SURVEY, answerOf, storeCfg } from '../lib/settings';
 import { parseLocalInput } from '../lib/geo';
 import { num, rp } from '../lib/format';
-import type { Outlet, PrintTarget, Role, Settings } from '../lib/types';
+import { FN_OPTIONS, KIND_OPTIONS, codeMeaning, guessKind, sampleNo, splitCode, type DeviceFn, type DeviceKind } from '../lib/device';
+import { ROLE_LABEL } from '../lib/labels';
+import type { EngageCfg, Outlet, PrintTarget, Role, Settings, SurveyQuestion } from '../lib/types';
 import { fmtShort } from '../lib/format';
 
 export default function Pengaturan() {
   const s = useSession();
   const owner = s.user?.role === 'owner';
-  const [tab, setTab] = useState<'perangkat' | 'printer' | 'toko' | 'promo' | 'pengguna' | 'email' | 'impor'>('perangkat');
-  const tabs = [
-    { value: 'perangkat' as const, label: 'Perangkat' },
-    { value: 'printer' as const, label: 'Printer' },
-    ...(owner ? [{ value: 'toko' as const, label: 'Toko & cabang' }, { value: 'promo' as const, label: 'Promo, poin & ongkir' }, { value: 'pengguna' as const, label: 'Pengguna' }, { value: 'email' as const, label: 'Email' }, { value: 'impor' as const, label: 'Impor Kasir Pintar' }] : []),
+  type Tab = 'perangkat' | 'printer' | 'toko' | 'promo' | 'perangkai' | 'survei' | 'pengguna' | 'email' | 'impor';
+  const [tab, setTab] = useState<Tab>('perangkat');
+  const tabs: { value: Tab; label: string }[] = [
+    { value: 'perangkat', label: 'Perangkat' },
+    { value: 'printer', label: 'Printer' },
+    ...(owner ? [
+      { value: 'toko', label: 'Toko & cabang' }, { value: 'promo', label: 'Promo, poin & ongkir' }, { value: 'perangkai', label: 'Perangkai' },
+      { value: 'survei', label: 'Survei' }, { value: 'pengguna', label: 'Pengguna' }, { value: 'email', label: 'Email' }, { value: 'impor', label: 'Impor Kasir Pintar' },
+    ] as { value: Tab; label: string }[] : []),
   ];
   return (
     <div className="page">
@@ -32,6 +38,8 @@ export default function Pengaturan() {
       {tab === 'toko' && owner && <StoreTab />}
       {tab === 'pengguna' && owner && <UsersTab />}
       {tab === 'promo' && owner && <PromoTab />}
+      {tab === 'perangkai' && owner && <FloristTab />}
+      {tab === 'survei' && owner && <SurveyTab />}
       {tab === 'email' && owner && <EmailTab />}
       {tab === 'impor' && owner && <ImportTab />}
     </div>
@@ -50,15 +58,35 @@ function DeviceTab() {
   const outlets = useLiveQuery(() => db.outlets.toArray(), []) || [];
   const errors = useLiveQuery(() => getMeta<any[]>('sync_errors', []), []) || [];
   const [cfg, setCfg] = useDeviceConfig();
+  const code = s.device?.code || '';
+  const cur = splitCode(code);
+  const [kind, setKind] = useState<DeviceKind>(cur?.kind || guessKind());
+  const [fn, setFn] = useState<DeviceFn>(cur?.fn || (s.user?.role === 'perangkai' ? 'R' : 'K'));
+  const [busy, setBusy] = useState(false);
+  const changed = !cur || cur.kind !== kind || cur.fn !== fn;
+  async function applyCode() {
+    setBusy(true);
+    try { const d = await changeDeviceCode(kind, fn); toast(`Kode perangkat sekarang ${d.code}. Nomor struk berikutnya ${sampleNo(d.code)}`); }
+    catch (e) { toast((e as Error).message, 'err'); } finally { setBusy(false); }
+  }
   if (!cfg) return null;
   return (
     <div className="two">
       <section className="card">
         <h3>Perangkat ini</h3>
-        <div className="row"><span>Kode perangkat (awalan nomor struk)</span><b>{s.device?.code}</b></div>
-        <div className="row"><span>Nama</span><b>{s.device?.name}</b></div>
-        <div className="row"><span>Pengguna</span><b>{s.user?.name} ({s.user?.role})</b></div>
-        <div className="row"><span>Server</span><b className="break">{s.serverUrl}</b></div>
+        <div className="devcode">
+          <span className="code" data-testid="device-code">{code || '?'}</span>
+          <div><b>{codeMeaning(code)}</b><div className="muted">Awalan nomor struk: {code ? `${sampleNo(code)}, ${sampleNo(code).replace(/001$/, '002')}, …` : '-'}</div></div>
+        </div>
+        <Field group label="Jenis"><Seg value={kind} onChange={setKind} options={KIND_OPTIONS} /></Field>
+        <Field group label="Dipakai untuk"><Seg value={fn} onChange={setFn} options={FN_OPTIONS} /></Field>
+        {changed && <button className="btn" disabled={busy} onClick={applyCode} data-testid="pakai-kode">Pakai kode {kind}{fn}</button>}
+        <p className="muted small">Huruf pertama: K = Komputer, H = HP, T = Tablet. Huruf kedua: K = Kasir, R = Ruang rangkai, O = Owner. Angka di belakang (KK2, KK3) membedakan perangkat sejenis. Nomor struk yang sudah terbit tidak berubah.</p>
+        <dl className="dl">
+          <dt>Nama</dt><dd>{s.device?.name}</dd>
+          <dt>Pengguna</dt><dd>{s.user?.name} · {s.user ? ROLE_LABEL[s.user.role] : ''}</dd>
+          <dt>Server</dt><dd className="break">{s.serverUrl}</dd>
+        </dl>
         <Field label="Cabang perangkat ini">
           <select value={cfg.outletId} onChange={(e) => setCfg({ ...cfg, outletId: e.target.value })}>
             {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
@@ -68,9 +96,11 @@ function DeviceTab() {
       </section>
       <section className="card">
         <h3>Sinkronisasi otomatis</h3>
-        <div className="row"><span>Status</span><b>{st.online ? (st.pending ? `${st.pending} perubahan menunggu` : 'Tersinkron') : 'Offline'}</b></div>
-        <div className="row"><span>Terakhir</span><b>{st.lastSync ? new Date(st.lastSync).toLocaleTimeString('id-ID') : '-'}</b></div>
-        <div className="row"><span>Nomor urut data server</span><b>{st.cursor}</b></div>
+        <dl className="dl">
+          <dt>Status</dt><dd>{st.online ? (st.pending ? `${st.pending} perubahan menunggu` : 'Tersinkron') : 'Offline'}</dd>
+          <dt>Terakhir</dt><dd>{st.lastSync ? new Date(st.lastSync).toLocaleTimeString('id-ID') : '-'}</dd>
+          <dt>Nomor urut data</dt><dd>{num(st.cursor)}</dd>
+        </dl>
         <p className="muted small">Sinkron berjalan sendiri: saat aplikasi dibuka, setiap ada transaksi, saat perangkat lain mengubah data (realtime), dan saat internet kembali. Tidak perlu menekan tombol.</p>
         <button className="btn" onClick={() => sync.resync()}>Tarik ulang semua data</button>
         {errors.length > 0 && (
@@ -230,7 +260,8 @@ function PromoTab() {
   const setE = (p: Partial<typeof E>) => setC({ ...c, engage: { ...E, ...p } });
   const setD = (p: Partial<typeof D>) => setC({ ...c, delivery: { ...D, ...p } });
   async function saveAll() {
-    await save<Settings>('settings', 'toko', { loyalty: c!.loyalty, engagement: c!.engage, delivery: c!.delivery, florists: c!.florists.map((x) => x.trim()).filter(Boolean) });
+    // bank survei diambil dari data terbaru agar perubahan di tab Survei tidak tertimpa
+    await save<Settings>('settings', 'toko', { loyalty: c!.loyalty, engagement: { ...c!.engage, survey: storeCfg(st).engage.survey, per_popup: storeCfg(st).engage.per_popup }, delivery: c!.delivery });
     toast('Pengaturan promo, poin, dan ongkir disimpan');
   }
   const numIn = (v: number, on: (n: number) => void, label: string) => <input type="number" min={0} value={v} onChange={(e) => on(Number(e.target.value))} aria-label={label} />;
@@ -263,13 +294,7 @@ function PromoTab() {
             <Field label="Diskon ulasan minimal"><MoneyInput value={E.review_discount_min} onChange={(review_discount_min) => setE({ review_discount_min })} /></Field>
             <Field label="Diskon ulasan maksimal"><MoneyInput value={E.review_discount_max} onChange={(review_discount_max) => setE({ review_discount_max })} /></Field>
           </div>
-          {E.survey.slice(0, 2).map((q, i) => (
-            <div key={i} className="box stack">
-              <Field label={`Pertanyaan survei ${i + 1}`}><input value={q.q} onChange={(e) => setE({ survey: E.survey.map((x, j) => (j === i ? { ...x, q: e.target.value } : x)) })} /></Field>
-              <Field label="Pilihan jawaban (pisahkan koma)"><input value={q.options.join(', ')} onChange={(e) => setE({ survey: E.survey.map((x, j) => (j === i ? { ...x, options: e.target.value.split(',').map((o) => o.trim()).filter(Boolean) } : x)) })} /></Field>
-            </div>
-          ))}
-          <p className="muted small">Jawaban survei tampil di Laporan › Analisis penjualan. Mengubah teks pertanyaan memulai hitungan baru untuk pertanyaan itu.</p>
+          <p className="calc">Survei: {storeCfg(st).engage.survey.filter((q) => q.active !== false).length} pertanyaan aktif, {storeCfg(st).engage.per_popup} diacak per pop-up. Atur pertanyaan di tab <b>Survei</b>.</p>
         </section>
       </div>
       <div className="two">
@@ -280,18 +305,9 @@ function PromoTab() {
             <Field label="Ongkir minimum"><MoneyInput value={D.min} onChange={(min) => setD({ min })} /></Field>
           </div>
           <Field label="Pembulatan ke atas (Rp)">{numIn(D.round, (round) => setD({ round: Math.max(1, round) }), 'Pembulatan')}</Field>
-          <p className="calc">Ongkir = maks({rp(D.min)}, km × {rp(D.rate)}, dibulatkan ke atas {rp(D.round)}). Jarak memakai rute jalan dari OpenStreetMap; bila tidak tersedia, garis lurus × 1,3.</p>
+          <p className="calc">Ongkir = maks({rp(D.min)}, km × {rp(D.rate)}, dibulatkan ke atas {rp(D.round)}). km = jarak rute jalan kendaraan, dibulatkan ke atas 0,1 km.</p>
         </section>
-        <section className="card">
-          <h3>Daftar perangkai</h3>
-          {c.florists.map((n, i) => (
-            <div key={i} className="row">
-              <input value={n} onChange={(e) => setC({ ...c, florists: c.florists.map((x, j) => (j === i ? e.target.value : x)) })} aria-label={`Perangkai ${i + 1}`} />
-              <button className="btn small danger" onClick={() => setC({ ...c, florists: c.florists.filter((_, j) => j !== i) })}>Hapus</button>
-            </div>
-          ))}
-          <button className="btn small" onClick={() => setC({ ...c, florists: [...c.florists, ''] })}><Icon name="plus" size={16} />Perangkai</button>
-        </section>
+        <RouteKeyCard />
       </div>
       <button className="btn primary big" onClick={saveAll} data-testid="simpan-promo">Simpan pengaturan</button>
     </div>
@@ -312,30 +328,40 @@ function UsersTab() {
     try { await api(`/api/users/${id}`, { method: 'PATCH', body }); load(); toast('Disimpan'); } catch (e) { toast((e as Error).message, 'err'); }
   }
   return (
-    <div className="two">
+    <div className="stack">
       <section className="card">
         <h3>Pengguna</h3>
-        {users.map((u) => (
-          <div key={u.id} className="row">
-            <span><b>{u.name}</b> <span className="muted">@{u.username}{u.email ? ` · ${u.email}` : ' · tanpa email'}</span></span>
-            <button className="btn small" onClick={() => { const em = prompt(`Email untuk ${u.name} (kosongkan untuk menghapus)`, u.email || ''); if (em !== null) patch(u.id, { email: em }); }}>Email</button>
-            <select value={u.role} onChange={(e) => patch(u.id, { role: e.target.value })} aria-label="Peran" style={{ maxWidth: 130 }}><option value="owner">Owner</option><option value="kasir">Admin</option><option value="perangkai">Perangkai</option></select>
-            <select value={u.outlet_id || 'outlet-utama'} onChange={(e) => patch(u.id, { outlet_id: e.target.value })} aria-label="Cabang" style={{ maxWidth: 160 }}>{outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select>
-            <button className="btn small" onClick={() => { const pw = prompt(`Kata sandi baru untuk ${u.name} (min. 6)`); if (pw) patch(u.id, { password: pw }); }}>Sandi</button>
-            <button className={`btn small ${u.active ? '' : 'primary'}`} onClick={() => patch(u.id, { active: !u.active })}>{u.active ? 'Nonaktifkan' : 'Aktifkan'}</button>
-          </div>
-        ))}
+        <div className="ulist">
+          <div className="uhead"><span>Nama</span><span>Peran</span><span>Cabang</span><span /></div>
+          {users.map((u) => (
+            <div key={u.id} className={`urow ${u.active ? '' : 'off'}`} data-testid="user-row">
+              <div className="uwho">
+                <span className="avatar">{u.name.replace(/[^\p{L}\s]/gu, '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase()}</span>
+                <div className="grow"><b>{u.name}</b>{!u.active && <Badge tone="red">nonaktif</Badge>}<div className="muted">@{u.username} · {u.email || <span className="red">tanpa email</span>}</div></div>
+              </div>
+              <select value={u.role} onChange={(e) => patch(u.id, { role: e.target.value })} aria-label={`Peran ${u.name}`}><option value="owner">Owner</option><option value="kasir">Admin</option><option value="perangkai">Perangkai</option></select>
+              <select value={u.outlet_id || 'outlet-utama'} onChange={(e) => patch(u.id, { outlet_id: e.target.value })} aria-label={`Cabang ${u.name}`}>{outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select>
+              <div className="uact">
+                <button className="btn small ghost" onClick={() => { const em = prompt(`Email untuk ${u.name} (kosongkan untuk menghapus)`, u.email || ''); if (em !== null) patch(u.id, { email: em }); }}>Email</button>
+                <button className="btn small ghost" onClick={() => { const pw = prompt(`Kata sandi baru untuk ${u.name} (min. 6)`); if (pw) patch(u.id, { password: pw }); }}>Sandi</button>
+                <button className={`btn small ${u.active ? 'ghost danger' : 'primary'}`} onClick={() => patch(u.id, { active: !u.active })}>{u.active ? 'Nonaktifkan' : 'Aktifkan'}</button>
+              </div>
+            </div>
+          ))}
+        </div>
         <p className="muted small">Peran: <b>Owner</b> semua menu termasuk laporan dan pengaturan promo; <b>Admin</b> kasir, pesanan, pelanggan, shift; <b>Perangkai</b> papan produksi. Cabang menentukan stok dan laporan saat pengguna masuk.</p>
       </section>
       <section className="card">
         <h3>Tambah pengguna</h3>
-        <Field label="Nama"><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-        <Field label="Username"><input value={f.username} onChange={(e) => setF({ ...f, username: e.target.value.toLowerCase() })} autoCapitalize="none" /></Field>
-        <Field label="Email (untuk reset kata sandi)"><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} autoCapitalize="none" /></Field>
-        <Field label="Kata sandi (min. 6)"><input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></Field>
-        <Field group label="Peran"><Seg value={f.role} onChange={(role) => setF({ ...f, role })} options={[{ value: 'kasir', label: 'Admin' }, { value: 'perangkai', label: 'Perangkai' }, { value: 'owner', label: 'Owner' }]} /></Field>
-        <Field label="Cabang"><select value={f.outlet_id} onChange={(e) => setF({ ...f, outlet_id: e.target.value })}>{outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></Field>
-        <button className="btn primary" disabled={!f.name || !f.username || f.password.length < 6} onClick={add}>Tambah</button>
+        <div className="formgrid">
+          <Field label="Nama"><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
+          <Field label="Username"><input value={f.username} onChange={(e) => setF({ ...f, username: e.target.value.toLowerCase() })} autoCapitalize="none" /></Field>
+          <Field label="Email (untuk reset kata sandi)"><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} autoCapitalize="none" /></Field>
+          <Field label="Kata sandi (min. 6)"><input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></Field>
+          <Field group label="Peran"><Seg value={f.role} onChange={(role) => setF({ ...f, role })} options={[{ value: 'kasir', label: 'Admin' }, { value: 'perangkai', label: 'Perangkai' }, { value: 'owner', label: 'Owner' }]} /></Field>
+          <Field label="Cabang"><select value={f.outlet_id} onChange={(e) => setF({ ...f, outlet_id: e.target.value })}>{outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></Field>
+        </div>
+        <button className="btn primary" style={{ alignSelf: 'flex-start' }} disabled={!f.name || !f.username || f.password.length < 6} onClick={add}>Tambah pengguna</button>
       </section>
     </div>
   );
@@ -434,5 +460,223 @@ function EmailTab() {
         <p className="muted small">Server harus terhubung ke internet agar email terkirim. Bila Gmail menolak, cabut app password lama lalu buat yang baru.</p>
       </section>
     </div>
+  );
+}
+
+/** Kunci OpenRouteService untuk jarak rute jalan (disimpan di server, tidak pernah dikirim balik utuh). */
+function RouteKeyCard() {
+  const [g, setG] = useState<{ hasOrsKey: boolean; keyHint: string } | null>(null);
+  const [key, setKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api<{ hasOrsKey: boolean; keyHint: string }>('/api/geo-config').then(setG).catch((e) => toast(e.message, 'err')); }, []);
+  async function saveKey(k: string) {
+    setBusy(true);
+    try { setG(await api('/api/geo-config', { body: { orsKey: k } })); setKey(''); toast(k ? 'Kunci OpenRouteService disimpan' : 'Kunci dihapus'); }
+    catch (e) { toast((e as Error).message, 'err'); } finally { setBusy(false); }
+  }
+  async function test() {
+    setBusy(true);
+    try {
+      const cfg = await getDeviceConfig();
+      const o = await db.outlets.get(cfg.outletId);
+      if (!o?.location) throw new Error('Simpan lokasi toko dulu di tab Toko & cabang');
+      const r = await api<{ km: number; source: string; minutes?: number }>('/api/geo-config/test', { body: { from: o.location }, timeout: 25000 });
+      toast(`Rute uji ${r.km.toLocaleString('id-ID')} km lewat ${r.source === 'ors' ? 'OpenRouteService' : 'OSRM (cadangan)'}`);
+    } catch (e) { toast((e as Error).message, 'err'); } finally { setBusy(false); }
+  }
+  return (
+    <section className="card">
+      <h3>Rute jalan kendaraan</h3>
+      <dl className="dl">
+        <dt>Penyedia utama</dt><dd>OpenRouteService (profil mobil) {g?.hasOrsKey ? <Badge tone="green">kunci {g.keyHint}</Badge> : <Badge tone="amber">belum ada kunci</Badge>}</dd>
+        <dt>Cadangan</dt><dd>OSRM (server demo OpenStreetMap)</dd>
+        <dt>Bila keduanya gagal</dt><dd>Kasir mengisi km manual. Tidak ada perkiraan garis lurus.</dd>
+      </dl>
+      <Field label="API key OpenRouteService" hint={g?.hasOrsKey ? 'Kosongkan bila tidak diganti.' : 'Gratis: 2.000 rute/hari, 40/menit.'}>
+        <input type="password" value={key} onChange={(e) => setKey(e.target.value.trim())} autoComplete="off" placeholder="eyJvcmciOi…" data-testid="ors-key" />
+      </Field>
+      <div className="btns">
+        <button className="btn primary" disabled={busy || !key} onClick={() => saveKey(key)}>Simpan kunci</button>
+        <button className="btn" disabled={busy} onClick={test}>Uji rute</button>
+        {g?.hasOrsKey && <button className="btn ghost danger" disabled={busy} onClick={() => saveKey('')}>Hapus kunci</button>}
+      </div>
+      <ol className="small muted">
+        <li>Daftar gratis di <b>account.heigit.org</b> (penyedia OpenRouteService).</li>
+        <li>Buat API key baru, salin, tempel di atas, lalu Simpan dan Uji rute.</li>
+      </ol>
+    </section>
+  );
+}
+
+interface NotifyJob { id: number; order_id: string; email: string; florist: string; label: string; kind: 'request' | 'cancel'; seq: number; status: 'pending' | 'sent' | 'failed' | 'expired'; attempts: number; last_error?: string | null; created_at: string; sent_at?: string | null }
+interface NotifyView { enabled: boolean; leadMinutes: number; contacts: { name: string; email: string }[]; smtp: { configured: boolean; from: string | null }; jobs: NotifyJob[] }
+const JOB_STATUS: Record<NotifyJob['status'], [string, 'green' | 'amber' | 'red' | 'gray']> = { sent: ['Terkirim', 'green'], pending: ['Menunggu', 'amber'], failed: ['Gagal', 'red'], expired: ['Kedaluwarsa', 'gray'] };
+
+/** Daftar perangkai + email Google mereka untuk notifikasi tugas dan undangan Google Calendar. */
+function FloristTab() {
+  const st = useLiveQuery(() => db.settings.get('toko'));
+  const [nv, setNv] = useState<NotifyView | null>(null);
+  const [rows, setRows] = useState<{ name: string; email: string }[] | null>(null);
+  const [opt, setOpt] = useState({ enabled: true, leadMinutes: 60 });
+  const [busy, setBusy] = useState('');
+  const load = () => api<NotifyView>('/api/notify').then(setNv).catch((e) => toast(e.message, 'err'));
+  useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, []);
+  useEffect(() => {
+    if (!st || !nv || rows) return;
+    const email = (n: string) => nv.contacts.find((c) => c.name.trim().toLowerCase() === n.trim().toLowerCase())?.email || '';
+    setRows(storeCfg(st).florists.map((name) => ({ name, email: email(name) })));
+    setOpt({ enabled: nv.enabled, leadMinutes: nv.leadMinutes });
+  }, [st, nv]); // eslint-disable-line
+  if (!rows || !nv) return null;
+  const setRow = (i: number, p: Partial<{ name: string; email: string }>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...p } : r)));
+  async function saveAll() {
+    setBusy('save');
+    try {
+      const clean = rows!.map((r) => ({ name: r.name.trim(), email: r.email.trim() })).filter((r) => r.name);
+      setNv(await api<NotifyView>('/api/notify', { body: { ...opt, contacts: clean } }));
+      await save<Settings>('settings', 'toko', { florists: clean.map((r) => r.name) });
+      setRows(clean);
+      toast('Perangkai & notifikasi disimpan');
+    } catch (e) { toast((e as Error).message, 'err'); } finally { setBusy(''); }
+  }
+  async function test(name: string, cancel: boolean) {
+    setBusy(name);
+    try { const r = await api<{ email: string }>('/api/notify/test', { body: { name, cancel }, timeout: 40000 }); toast(cancel ? `Pembatalan uji dikirim ke ${r.email}` : `Undangan uji dikirim ke ${r.email}. Cek Google Calendar besok 09.00.`); }
+    catch (e) { toast((e as Error).message, 'err'); } finally { setBusy(''); }
+  }
+  const saved = (n: string) => nv.contacts.some((c) => c.name.trim().toLowerCase() === n.trim().toLowerCase());
+  return (
+    <div className="stack">
+      <div className="split even">
+        <section className="card">
+          <h3>Daftar perangkai</h3>
+          <div className="flist">
+            <div className="fhead"><span>Nama</span><span>Gmail perangkai</span><span /></div>
+            {rows.map((r, i) => (
+              <div key={i} className="frow" data-testid="florist-row">
+                <input value={r.name} onChange={(e) => setRow(i, { name: e.target.value })} aria-label={`Nama perangkai ${i + 1}`} />
+                <input type="email" value={r.email} onChange={(e) => setRow(i, { email: e.target.value.trim() })} placeholder="nama@gmail.com" autoCapitalize="none" aria-label={`Email ${r.name || 'perangkai'}`} />
+                <div className="uact">
+                  <button className="btn small ghost" disabled={!!busy || !saved(r.name) || !nv.smtp.configured} onClick={() => test(r.name, false)} title="Kirim undangan uji">Uji</button>
+                  <button className="btn small ghost" disabled={!!busy || !saved(r.name) || !nv.smtp.configured} onClick={() => test(r.name, true)} title="Batalkan undangan uji">Batalkan uji</button>
+                  <button className="icon-btn" onClick={() => setRows(rows.filter((_, j) => j !== i))} aria-label={`Hapus ${r.name}`}><Icon name="close" size={18} /></button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <button className="btn small" onClick={() => setRows([...rows, { name: '', email: '' }])}><Icon name="plus" size={16} />Perangkai</button>
+          <p className="muted small">Nama tampil di pilihan perangkai saat checkout dan di tiket produksi. Email hanya tersimpan di server, tidak ikut ke HP kasir.</p>
+        </section>
+        <section className="card">
+          <h3>Notifikasi tugas & Google Calendar</h3>
+          <label className="check"><input type="checkbox" checked={opt.enabled} onChange={(e) => setOpt({ ...opt, enabled: e.target.checked })} data-testid="notif-aktif" />Kirim otomatis saat perangkai ditunjuk</label>
+          <Field label="Durasi rangkai di kalender (menit sebelum jadwal ambil/antar)"><input type="number" min={15} max={1440} step={15} value={opt.leadMinutes} onChange={(e) => setOpt({ ...opt, leadMinutes: Number(e.target.value) })} aria-label="Durasi rangkai" /></Field>
+          <dl className="dl">
+            <dt>Pengirim</dt><dd>{nv.smtp.configured ? nv.smtp.from : <span className="red">Belum diatur. Isi di tab Email.</span>}</dd>
+            <dt>Ditunjuk</dt><dd>Email tugas + undangan kalender ke perangkai (±15 detik setelah tersimpan).</dd>
+            <dt>Jadwal/isi berubah</dt><dd>Undangan diperbarui.</dd>
+            <dt>Dipindah / batal</dt><dd>Undangan dibatalkan, acara hilang dari kalender perangkai.</dd>
+          </dl>
+          <div className="note warn small">Sekali per perangkai: simpan alamat {nv.smtp.from || 'email toko'} di Kontak Google mereka, atau di Google Calendar › Setelan › Setelan acara › “Tambahkan undangan ke kalender saya” pilih “Dari semua orang”. Tanpa ini Google bisa menahan undangan dari pengirim yang belum dikenal. Pakai tombol Uji lalu Batalkan uji untuk memastikan.</div>
+        </section>
+      </div>
+      <button className="btn primary big" onClick={saveAll} disabled={busy === 'save'} data-testid="simpan-perangkai">Simpan perangkai & notifikasi</button>
+      <section className="card">
+        <h3>Riwayat notifikasi</h3>
+        <div className="table flat" style={{ ['--cols' as string]: '130px 90px minmax(0,1fr) 130px 110px', ['--cols-sm' as string]: '70px minmax(0,1fr) auto' }}>
+          <div className="thead"><div className="hide-sm">Waktu</div><div>Pesanan</div><div>Perangkai</div><div className="hide-sm">Jenis</div><div>Status</div></div>
+          {nv.jobs.map((j) => (
+            <div key={j.id} className="trow" data-testid="notif-row">
+              <div className="muted hide-sm">{fmtShort(j.sent_at || j.created_at)}</div>
+              <div><b>{j.label}</b></div>
+              <div className="clip">{j.florist}<div className="muted clip">{j.email}{j.last_error ? ` · ${j.last_error}` : ''}</div></div>
+              <div className="hide-sm">{j.kind === 'cancel' ? 'Pembatalan' : j.seq > 0 ? 'Pembaruan' : 'Undangan baru'}</div>
+              <div><Badge tone={JOB_STATUS[j.status][1]}>{JOB_STATUS[j.status][0]}</Badge></div>
+            </div>
+          ))}
+          {!nv.jobs.length && <Empty>Belum ada notifikasi.</Empty>}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+/** Bank pertanyaan survei: pop-up kasir mengambil 1–2 pertanyaan aktif secara acak. */
+function SurveyTab() {
+  const st = useLiveQuery(() => db.settings.get('toko'));
+  const answered = useLiveQuery(() => db.orders.filter((o) => !!o.survey && !o.void).toArray(), []) || [];
+  const [edit, setEdit] = useState<SurveyQuestion | null>(null);
+  const cfg = storeCfg(st).engage;
+  const bank = cfg.survey;
+  const stats = useMemo(() => {
+    const m = new Map<string, { n: number; top: string }>();
+    for (const q of bank) {
+      const c = new Map<string, number>();
+      for (const o of answered) { const a = answerOf(o.survey, q); if (a) c.set(a, (c.get(a) || 0) + 1); }
+      const top = [...c.entries()].sort((x, y) => y[1] - x[1])[0];
+      m.set(q.id, { n: [...c.values()].reduce((s, x) => s + x, 0), top: top ? `${top[0]} (${top[1]})` : '' });
+    }
+    return m;
+  }, [bank, answered]);
+  if (!st) return null;
+  const persist = (survey: SurveyQuestion[], extra: Partial<EngageCfg> = {}) => save<Settings>('settings', 'toko', { engagement: { ...cfg, ...extra, survey } });
+  const active = bank.filter((q) => q.active !== false).length;
+  const missing = DEFAULT_SURVEY.filter((d) => !bank.some((q) => q.id === d.id));
+  async function remove(q: SurveyQuestion) {
+    const n = stats.get(q.id)?.n || 0;
+    if (!confirm(`Hapus pertanyaan "${q.q}"?${n ? ` ${n} jawaban lama tetap tersimpan di transaksi, tetapi tidak tampil lagi di analisis.` : ''}`)) return;
+    await persist(bank.filter((x) => x.id !== q.id));
+  }
+  return (
+    <div className="stack" data-testid="survei">
+      <div className="toolbar">
+        <span className="muted"><b style={{ color: 'var(--ink)' }}>{bank.length} pertanyaan</b> · {active} aktif</span>
+        <Field group label="Per pop-up"><Seg value={String(cfg.per_popup) as '1' | '2'} onChange={(v) => persist(bank, { per_popup: Number(v) })} options={[{ value: '1', label: '1 pertanyaan' }, { value: '2', label: '2 pertanyaan' }]} /></Field>
+        <span className="grow" />
+        {missing.length > 0 && <button className="btn" onClick={() => persist([...bank, ...missing])}>Pulihkan {missing.length} pertanyaan bawaan</button>}
+        <button className="btn primary" onClick={() => setEdit({ id: '', q: '', options: [], active: true })} data-testid="tanya-baru"><Icon name="plus" size={18} />Pertanyaan</button>
+      </div>
+      <div className="qlist">
+        {bank.map((q, i) => {
+          const s = stats.get(q.id);
+          return (
+            <div key={q.id} className={`qrow ${q.active === false ? 'off' : ''}`} data-testid="survey-row">
+              <label className="check" title={q.active === false ? 'Aktifkan' : 'Nonaktifkan'}><input type="checkbox" checked={q.active !== false} onChange={(e) => persist(bank.map((x) => (x.id === q.id ? { ...x, active: e.target.checked } : x)))} aria-label={`Aktif: ${q.q}`} /></label>
+              <span className="qno">{i + 1}</span>
+              <div className="qbody"><b>{q.q}</b><div className="qopts">{q.options.map((o) => <span key={o}>{o}</span>)}</div></div>
+              <div className="qstat">{s?.n ? <><b>{num(s.n)}</b> jawaban<div className="muted">teratas: {s.top}</div></> : <span className="muted">belum ada jawaban</span>}</div>
+              <div className="uact">
+                <button className="btn small ghost" onClick={() => setEdit(q)}>Ubah</button>
+                <button className="icon-btn" onClick={() => remove(q)} aria-label={`Hapus pertanyaan ${q.q}`}><Icon name="close" size={18} /></button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="muted small">Setiap kali pop-up muncul, {cfg.per_popup} pertanyaan aktif dipilih acak. Pertanyaan disimpan dengan kode tetap, jadi mengubah kalimat tidak menghapus hitungan jawaban. Rincian per jawaban ada di Laporan › Analisis penjualan.</p>
+      {edit && <QuestionEditor q={edit} onClose={() => setEdit(null)} onSave={async (q) => {
+        const next = q.id ? bank.map((x) => (x.id === q.id ? q : x)) : [...bank, { ...q, id: `q-${Date.now().toString(36)}` }];
+        await persist(next);
+        setEdit(null);
+        toast('Pertanyaan disimpan');
+      }} />}
+    </div>
+  );
+}
+
+function QuestionEditor({ q, onSave, onClose }: { q: SurveyQuestion; onSave: (q: SurveyQuestion) => void; onClose: () => void }) {
+  const [text, setText] = useState(q.q);
+  const [opts, setOpts] = useState(q.options.join('\n'));
+  const [active, setActive] = useState(q.active !== false);
+  const options = [...new Set(opts.split('\n').map((x) => x.trim()).filter(Boolean))];
+  return (
+    <Modal title={q.id ? 'Ubah pertanyaan' : 'Pertanyaan baru'} onClose={onClose}
+      footer={<button className="btn primary grow" disabled={!text.trim() || options.length < 2} onClick={() => onSave({ id: q.id, q: text.trim(), options, active })} data-testid="simpan-tanya">Simpan</button>}>
+      <div className="stack">
+        <Field label="Pertanyaan"><input value={text} onChange={(e) => setText(e.target.value)} placeholder="Warna buket favorit?" data-testid="tanya-teks" /></Field>
+        <Field label="Pilihan jawaban (satu per baris, minimal 2)" hint={`${options.length} pilihan`}><textarea rows={6} value={opts} onChange={(e) => setOpts(e.target.value)} placeholder={'Pink\nPutih\nMerah'} data-testid="tanya-opsi" /></Field>
+        <label className="check"><input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />Aktif (ikut diacak di pop-up)</label>
+      </div>
+    </Modal>
   );
 }

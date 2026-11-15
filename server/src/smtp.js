@@ -46,9 +46,63 @@ function lineReader(socket) {
   };
 }
 
+const wrap64 = (s) => b64(s).replace(/.{1,76}/g, '$&\r\n');
+
+/**
+ * Susun pesan MIME. Teks biasa = satu bagian base64. Dengan `calendar`, struktur yang dikenali Gmail/Outlook:
+ * multipart/mixed { multipart/alternative { text/plain, text/calendar; method=X }, lampiran undangan.ics }.
+ * @param {{from:string, fromName?:string}} cfg
+ * @param {{to:string, subject:string, text:string, calendar?:{method:'REQUEST'|'CANCEL', ics:string}}} msg
+ */
+export function buildMessage(cfg, msg) {
+  const domain = String(cfg.from).split('@')[1] || 'localhost';
+  const headers = [
+    `From: ${cfg.fromName ? `${encodeHeader(cfg.fromName)} ` : ''}<${cfg.from}>`,
+    `To: <${msg.to}>`,
+    `Subject: ${encodeHeader(msg.subject)}`,
+    `Date: ${new Date().toUTCString()}`,
+    `Message-ID: <${crypto.randomBytes(12).toString('hex')}@${domain}>`,
+    'MIME-Version: 1.0',
+  ];
+  if (!msg.calendar) {
+    headers.push('Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: base64');
+    return headers.join('\r\n') + '\r\n\r\n' + wrap64(msg.text);
+  }
+  const mixed = `mix-${crypto.randomBytes(8).toString('hex')}`;
+  const alt = `alt-${crypto.randomBytes(8).toString('hex')}`;
+  const { method, ics } = msg.calendar;
+  headers.push(`Content-Type: multipart/mixed; boundary="${mixed}"`);
+  const parts = [
+    `--${mixed}`,
+    `Content-Type: multipart/alternative; boundary="${alt}"`,
+    '',
+    `--${alt}`,
+    'Content-Type: text/plain; charset=utf-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    wrap64(msg.text),
+    `--${alt}`,
+    `Content-Type: text/calendar; charset=utf-8; method=${method}`,
+    'Content-Transfer-Encoding: base64',
+    '',
+    wrap64(ics),
+    `--${alt}--`,
+    '',
+    `--${mixed}`,
+    `Content-Type: application/ics; name="undangan.ics"`,
+    `Content-Disposition: attachment; filename="undangan.ics"`,
+    'Content-Transfer-Encoding: base64',
+    '',
+    wrap64(ics),
+    `--${mixed}--`,
+    '',
+  ];
+  return headers.join('\r\n') + '\r\n\r\n' + parts.join('\r\n');
+}
+
 /**
  * @param {{host:string, port:number, user?:string, pass?:string, from:string, fromName?:string}} cfg
- * @param {{to:string, subject:string, text:string}} msg
+ * @param {{to:string, subject:string, text:string, calendar?:{method:'REQUEST'|'CANCEL', ics:string}}} msg
  */
 export async function sendMail(cfg, msg, { timeoutMs = 20000 } = {}) {
   const port = Number(cfg.port) || 465;
@@ -95,19 +149,7 @@ export async function sendMail(cfg, msg, { timeoutMs = 20000 } = {}) {
     await cmd(`MAIL FROM:<${cfg.from}>`, [250], 'MAIL FROM');
     await cmd(`RCPT TO:<${msg.to}>`, [250, 251], 'RCPT TO');
     await cmd('DATA', [354], 'DATA');
-    const domain = String(cfg.from).split('@')[1] || 'localhost';
-    const headers = [
-      `From: ${cfg.fromName ? `${encodeHeader(cfg.fromName)} ` : ''}<${cfg.from}>`,
-      `To: <${msg.to}>`,
-      `Subject: ${encodeHeader(msg.subject)}`,
-      `Date: ${new Date().toUTCString()}`,
-      `Message-ID: <${crypto.randomBytes(12).toString('hex')}@${domain}>`,
-      'MIME-Version: 1.0',
-      'Content-Type: text/plain; charset=utf-8',
-      'Content-Transfer-Encoding: base64',
-    ];
-    const body = b64(msg.text).replace(/.{1,76}/g, '$&\r\n');
-    socket.write(headers.join('\r\n') + '\r\n\r\n' + body + '.\r\n');
+    socket.write(buildMessage(cfg, msg) + '.\r\n');
     await expect([250], 'kirim pesan');
     write('QUIT');
   } finally {

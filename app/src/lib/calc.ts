@@ -1,5 +1,6 @@
 // Perhitungan murni (tanpa I/O) supaya mudah diuji: total keranjang, laporan, shift.
-import type { CashMove, LoyaltyCfg, Order, OrderItem, Payment, Shift } from './types';
+import type { CashMove, LoyaltyCfg, Order, OrderItem, Payment, Shift, SurveyQuestion } from './types';
+import { answerOf } from './settings';
 
 export interface CartTotals {
   subtotal: number; item_discount: number; order_discount: number; extra_fee: number; total: number; cost_total: number; qty: number;
@@ -54,7 +55,7 @@ export interface Report {
   cashInTotal: number;
   byProduct: { name: string; qty: number; sales: number; cogs: number; profit: number }[];
   byCashier: { name: string; count: number; sales: number }[];
-  byHour: { hour: number; count: number; sales: number }[];
+  salesNoCost: number; // penjualan dari item ber-HPP 0 (laba kotor terlalu tinggi bila besar)
   voided: number;
 }
 
@@ -74,11 +75,10 @@ export function buildReport(inp: ReportInput): Report {
 
   const r: Report = {
     count: orders.length, qty: 0, gross: 0, discount: 0, extraFee: 0, netSales: 0, cogs: 0, grossProfit: 0, expenses: 0, netProfit: 0,
-    paidForPeriodOrders: 0, outstandingForPeriodOrders: 0, cashIn: [], cashInTotal: 0, byProduct: [], byCashier: [], byHour: [], voided: all.length - orders.length,
+    paidForPeriodOrders: 0, outstandingForPeriodOrders: 0, cashIn: [], cashInTotal: 0, byProduct: [], byCashier: [], salesNoCost: 0, voided: all.length - orders.length,
   };
   const prod = new Map<string, Report['byProduct'][number]>();
   const cash = new Map<string, Report['byCashier'][number]>();
-  const hours = Array.from({ length: 24 }, (_, hour) => ({ hour, count: 0, sales: 0 }));
 
   for (const o of orders) {
     r.gross += o.subtotal;
@@ -98,13 +98,12 @@ export function buildReport(inp: ReportInput): Report {
       p.cogs += it.qty * (it.cost || 0);
       p.profit = p.sales - p.cogs;
       prod.set(k, p);
+      if (!it.cost && (it.type || 'buket') !== 'jasa') r.salesNoCost += it.qty * it.price - (it.discount || 0);
     }
     const cn = o.cashier_name || '-';
     const c = cash.get(cn) || { name: cn, count: 0, sales: 0 };
     c.count++; c.sales += o.total;
     cash.set(cn, c);
-    const h = hours[new Date(o.created_at!).getHours()];
-    h.count++; h.sales += o.total;
   }
   r.grossProfit = r.netSales - r.cogs;
 
@@ -125,7 +124,6 @@ export function buildReport(inp: ReportInput): Report {
   r.cashIn = [...methods.values()].sort((x, y) => y.amount - x.amount);
   r.byProduct = [...prod.values()].sort((x, y) => y.sales - x.sales);
   r.byCashier = [...cash.values()].sort((x, y) => y.sales - x.sales);
-  r.byHour = hours.filter((h) => h.count > 0);
   return r;
 }
 
@@ -188,7 +186,7 @@ export function customerStats(customerId: string, orders: Order[], paid: Map<str
     s.earned += o.points_earned || 0;
     s.redeemed += o.points_redeemed || 0;
     for (const it of o.items) fav.set(it.name, (fav.get(it.name) || 0) + it.qty);
-    const oc = o.survey && Object.values(o.survey)[1];
+    const oc = answerOf(o.survey, { id: 'acara', q: 'Buket ini untuk acara apa?' });
     if (oc) occ.set(oc, (occ.get(oc) || 0) + 1);
   }
   s.avg = s.count ? Math.round(s.spend / s.count) : 0;
@@ -208,13 +206,13 @@ export interface Analysis {
   avgBasket: number;
   delivery: { count: number; fees: number; avgKm: number };
   review: { count: number; discount: number };
-  survey: { q: string; answers: { label: string; n: number }[] }[];
+  survey: { id: string; q: string; total: number; answers: { label: string; n: number }[] }[];
   florists: { name: string; orders: number; items: number }[];
   pointsRedeemed: number;
   pointsDiscount: number;
 }
 
-export function buildAnalysis(orders: Order[], from: Date, to: Date, dayKeyFn: (iso: string) => string, questions: string[], outletId?: string): Analysis {
+export function buildAnalysis(orders: Order[], from: Date, to: Date, dayKeyFn: (iso: string) => string, questions: Pick<SurveyQuestion, 'id' | 'q'>[], outletId?: string): Analysis {
   const a = from.getTime(), b = to.getTime();
   const xs = orders.filter((o) => !o.void && (!outletId || o.outlet_id === outletId) && inRange(o.created_at, a, b));
   const daily = new Map<string, { day: string; sales: number; count: number }>();
@@ -236,7 +234,7 @@ export function buildAnalysis(orders: Order[], from: Date, to: Date, dayKeyFn: (
     if (o.review_discount) { r.review.count++; r.review.discount += o.review_discount; }
     r.pointsRedeemed += o.points_redeemed || 0;
     r.pointsDiscount += o.points_discount || 0;
-    if (o.survey) surveys.forEach((s) => { const ans = o.survey![s.q]; if (ans) s.m.set(ans, (s.m.get(ans) || 0) + 1); });
+    if (o.survey) surveys.forEach((s) => { const ans = answerOf(o.survey, s.q); if (ans) s.m.set(ans, (s.m.get(ans) || 0) + 1); });
     if (o.florist) {
       const f = flor.get(o.florist) || { name: o.florist, orders: 0, items: 0 };
       f.orders++; f.items += o.items.reduce((s, i) => s + i.qty, 0);
@@ -248,7 +246,9 @@ export function buildAnalysis(orders: Order[], from: Date, to: Date, dayKeyFn: (
   r.repeatRate = perCust.size ? ([...perCust.values()].filter((n) => n >= 2).length / perCust.size) * 100 : 0;
   r.avgBasket = xs.length ? Math.round(total / xs.length) : 0;
   r.delivery.avgKm = r.delivery.count ? Math.round((kmSum / r.delivery.count) * 10) / 10 : 0;
-  r.survey = surveys.map((s) => ({ q: s.q, answers: [...s.m.entries()].sort((x, y) => y[1] - x[1]).map(([label, n]) => ({ label, n })) }));
+  r.survey = surveys
+    .map((s) => ({ id: s.q.id, q: s.q.q, total: [...s.m.values()].reduce((a, n) => a + n, 0), answers: [...s.m.entries()].sort((x, y) => y[1] - x[1]).map(([label, n]) => ({ label, n })) }))
+    .sort((x, y) => y.total - x.total);
   r.florists = [...flor.values()].sort((x, y) => y.orders - x.orders);
   return r;
 }

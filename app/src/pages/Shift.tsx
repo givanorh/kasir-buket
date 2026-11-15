@@ -85,12 +85,12 @@ export default function ShiftPage() {
       )}
       <section className="card">
         <h3>Riwayat shift</h3>
-        <div className="table">
+        <div className="table" style={{ ['--cols' as string]: 'minmax(0,1fr) auto auto auto', ['--cols-sm' as string]: 'minmax(0,1fr) auto' }}>
           {history.filter((h) => h.closed_at).map((h) => (
             <div key={h.id} className="trow">
               <div className="grow"><b>{h.user_name}</b><div className="muted">{fmtShort(h.opened_at)} – {fmtShort(h.closed_at)}</div></div>
-              <div className="right">Seharusnya {rp(h.expected_cash)}</div>
-              <div className="right">Aktual {rp(h.actual_cash)}</div>
+              <div className="right hide-sm">Seharusnya {rp(h.expected_cash)}</div>
+              <div className="right hide-sm">Aktual {rp(h.actual_cash)}</div>
               <div className={`right ${(h.actual_cash || 0) - (h.expected_cash || 0) ? 'red' : ''}`}>Selisih {rp((h.actual_cash || 0) - (h.expected_cash || 0))}</div>
             </div>
           ))}

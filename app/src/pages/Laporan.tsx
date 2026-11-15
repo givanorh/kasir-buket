@@ -58,14 +58,17 @@ export default function Laporan() {
 
   return (
     <div className="page">
-      <div className="toolbar wrap">
-        <Seg value={preset} onChange={setPreset} options={[{ value: 'hari', label: 'Hari ini' }, { value: 'kemarin', label: 'Kemarin' }, { value: '7', label: '7 hari' }, { value: 'bulan', label: 'Bulan ini' }, { value: 'custom', label: 'Pilih' }]} />
-        {preset === 'custom' && <><input type="date" value={a} onChange={(e) => setA(e.target.value)} /><input type="date" value={b} onChange={(e) => setB(e.target.value)} /></>}
-        {outlets.length > 1 && <select value={outlet} onChange={(e) => setOutlet(e.target.value)}><option value="">Semua cabang</option>{outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select>}
+      <div className="toolbar">
+        <Seg value={view} onChange={setView} options={[{ value: 'labarugi', label: 'Laba rugi' }, { value: 'analisis', label: 'Analisis penjualan' }]} />
+        <span className="grow" />
         <button className="btn" onClick={exportCsv}>Ekspor CSV</button>
       </div>
-      <p className="muted">{fmtDate(from.toISOString())} s.d. {fmtDate(to.toISOString())}{r.voided ? ` · ${r.voided} transaksi batal tidak dihitung` : ''}</p>
-      <Seg value={view} onChange={setView} options={[{ value: 'labarugi', label: 'Laba rugi' }, { value: 'analisis', label: 'Analisis penjualan' }]} />
+      <div className="toolbar filters">
+        <Seg value={preset} onChange={setPreset} options={[{ value: 'hari', label: 'Hari ini' }, { value: 'kemarin', label: 'Kemarin' }, { value: '7', label: '7 hari' }, { value: 'bulan', label: 'Bulan ini' }, { value: 'custom', label: 'Pilih' }]} />
+        {preset === 'custom' && <span className="daterange"><input type="date" value={a} onChange={(e) => setA(e.target.value)} aria-label="Dari tanggal" /><span>s.d.</span><input type="date" value={b} onChange={(e) => setB(e.target.value)} aria-label="Sampai tanggal" /></span>}
+        {outlets.length > 1 && <select value={outlet} onChange={(e) => setOutlet(e.target.value)} aria-label="Cabang"><option value="">Semua cabang</option>{outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select>}
+        <span className="muted">{fmtDate(from.toISOString())} s.d. {fmtDate(to.toISOString())}{r.voided ? ` · ${r.voided} transaksi batal tidak dihitung` : ''}</span>
+      </div>
       {view === 'analisis' ? <Analisis orders={orders} from={from} to={to} outletId={outlet || undefined} /> : <>
 
       <div className="kpis" data-testid="kpis">
@@ -86,6 +89,9 @@ export default function Laporan() {
           <div className="row strong"><span>= Laba kotor</span><b>{rp(r.grossProfit)}</b></div>
           <div className="row"><span>− Beban operasional</span><b>{rp(r.expenses)}</b></div>
           <div className="row strong"><span>= Laba bersih</span><b>{rp(r.netProfit)}</b></div>
+          {r.salesNoCost > 0 && r.netSales > 0 && (
+            <div className="note warn small" data-testid="hpp-kosong">{rp(r.salesNoCost)} ({((r.salesNoCost / r.netSales) * 100).toLocaleString('id-ID', { maximumFractionDigits: 1 })}% penjualan) berasal dari item ber-HPP Rp 0, sehingga laba kotor tercatat lebih tinggi dari kenyataan. Isi HPP di menu Produk; transaksi baru memakai HPP terbaru.</div>
+          )}
           <h3>Rekonsiliasi</h3>
           <div className="row"><span>Sudah dibayar (transaksi periode ini)</span><b>{rp(r.paidForPeriodOrders)}</b></div>
           <div className="row"><span>+ Sisa tagihan (DP/belum bayar)</span><b>{rp(r.outstandingForPeriodOrders)}</b></div>
@@ -94,22 +100,27 @@ export default function Laporan() {
         </section>
         <section className="card">
           <h3>Kas masuk per metode (basis tanggal bayar)</h3>
-          {r.cashIn.map((m) => <div key={m.method} className="row"><span>{m.method} ({m.count}×)</span><b>{rp(m.amount)}</b></div>)}
+          {r.cashIn.map((m) => <div key={m.method} className="row"><span>{m.method} <span className="muted">({num(m.count)}×)</span></span><b>{rp(m.amount)}</b></div>)}
           <div className="row strong"><span>Jumlah</span><b>{rp(r.cashInTotal)}</b></div>
           <p className="muted small">Kas masuk menghitung DP dan pelunasan pada tanggal uang diterima, sehingga bisa berbeda dari penjualan bersih.</p>
           <h3>Per kasir</h3>
-          {r.byCashier.map((c) => <div key={c.name} className="row"><span>{c.name} ({c.count} trx)</span><b>{rp(c.sales)}</b></div>)}
-          <h3>Per jam</h3>
-          <div className="hours">{r.byHour.map((h) => <div key={h.hour} title={`${h.count} trx · ${rp(h.sales)}`}><i style={{ height: `${Math.max(6, (h.count / Math.max(...r.byHour.map((x) => x.count))) * 60)}px` }} /><span>{h.hour}</span></div>)}</div>
+          {r.byCashier.map((c) => <div key={c.name} className="row"><span>{c.name} <span className="muted">({num(c.count)} trx)</span></span><b>{rp(c.sales)}</b></div>)}
         </section>
       </div>
 
       <section className="card">
-        <h3>Per produk</h3>
-        <div className="table">
-          <div className="thead"><div className="grow">Produk</div><div className="right">Qty</div><div className="right">Penjualan</div><div className="right hide-sm">HPP</div><div className="right">Laba</div></div>
+        <h3>Per produk <span className="muted">· {num(r.byProduct.length)} produk{r.byProduct.length > 50 ? ', 50 teratas' : ''}</span></h3>
+        <div className="table flat" style={{ ['--cols' as string]: 'minmax(0,1fr) 72px 150px 150px 150px 72px', ['--cols-sm' as string]: 'minmax(0,1fr) 44px 104px 104px' }}>
+          <div className="thead"><div>Produk</div><div className="right">Qty</div><div className="right">Penjualan</div><div className="right hide-sm">HPP</div><div className="right">Laba</div><div className="right hide-sm">Porsi</div></div>
           {r.byProduct.slice(0, 50).map((p) => (
-            <div key={p.name} className="trow"><div className="grow">{p.name}</div><div className="right">{p.qty}</div><div className="right">{rp(p.sales)}</div><div className="right hide-sm">{rp(p.cogs)}</div><div className="right">{rp(p.profit)}</div></div>
+            <div key={p.name} className="trow">
+              <div className="clip">{p.name}</div>
+              <div className="right">{num(p.qty)}</div>
+              <div className="right">{rp(p.sales)}</div>
+              <div className={`right hide-sm ${p.cogs ? '' : 'muted'}`}>{p.cogs ? rp(p.cogs) : 'HPP 0'}</div>
+              <div className="right">{rp(p.profit)}</div>
+              <div className="right hide-sm muted">{r.netSales ? ((p.sales / r.netSales) * 100).toLocaleString('id-ID', { maximumFractionDigits: 1 }) : 0}%</div>
+            </div>
           ))}
         </div>
       </section>
@@ -170,8 +181,9 @@ function HBars({ items }: { items: { label: string; n: number }[] }) {
 
 function Analisis({ orders, from, to, outletId }: { orders: Order[]; from: Date; to: Date; outletId?: string }) {
   const settings = useLiveQuery(() => db.settings.get('toko'));
-  const qs = storeCfg(settings).engage.survey.map((s) => s.q);
-  const an = useMemo(() => buildAnalysis(orders, from, to, (iso) => dayKey(iso), qs, outletId), [orders, from.getTime(), to.getTime(), qs.join('|'), outletId]);
+  const qs = storeCfg(settings).engage.survey;
+  const an = useMemo(() => buildAnalysis(orders, from, to, (iso) => dayKey(iso), qs, outletId), [orders, from.getTime(), to.getTime(), qs.map((q) => q.id + q.q).join('|'), outletId]);
+  const answered = an.survey.filter((s) => s.total > 0);
   const days = an.daily.length;
   const series = days > 62
     ? Object.values(an.daily.reduce<Record<string, { key: string; label: string; value: number; n: number }>>((acc, d) => {
@@ -204,10 +216,11 @@ function Analisis({ orders, from, to, outletId }: { orders: Order[]; from: Date;
           {!an.florists.length && <div className="muted">Belum ada pesanan dengan perangkai yang ditunjuk.</div>}
         </section>
       </div>
+      <h3 className="section-h">Survei pelanggan <span className="muted">· {answered.length} dari {an.survey.length} pertanyaan sudah terjawab pada periode ini</span></h3>
       <div className="two">
-        {an.survey.map((s) => (
-          <section key={s.q} className="card">
-            <h3>{s.q}</h3>
+        {answered.map((s) => (
+          <section key={s.id} className="card">
+            <h3>{s.q} <span className="muted">· {num(s.total)} jawaban</span></h3>
             <HBars items={s.answers} />
           </section>
         ))}

@@ -88,6 +88,9 @@ test('laporan: laba & rekonsiliasi dibayar + sisa = penjualan bersih', () => {
   assert.equal(r.paidForPeriodOrders + r.outstandingForPeriodOrders, r.netSales);
   assert.equal(r.outstandingForPeriodOrders, 155000);
   assert.equal(r.cashInTotal, 655000);
+  assert.equal(r.salesNoCost, 0, 'semua item punya HPP');
+  const r2 = buildReport({ orders: [order({ items: [{ name: 'Buket tanpa HPP', qty: 2, price: 100000, cost: 0, discount: 5000 }, { name: 'Jasa antar', qty: 1, price: 20000, cost: 0, discount: 0, type: 'jasa' }] })], payments: [], cashMoves: [], from: new Date('2026-11-15T00:00:00Z'), to: new Date('2026-11-15T23:59:59Z') });
+  assert.equal(r2.salesNoCost, 195000, '2 × 100.000 − 5.000; jasa tidak dihitung');
 });
 
 test('shift: kas seharusnya = awal + tunai + masuk − keluar', () => {
@@ -112,4 +115,45 @@ test('impor Kasir Pintar: waktu WIB & kode metode', async () => {
   assert.equal(kpTime('2026-11-15 10:00:00'), '2026-11-15T03:00:00.000Z');
   assert.equal(kpMethod('105'), 'QRIS');
   assert.equal(kpMethod(0), 'Tunai');
+});
+
+test('impor Kasir Pintar: HPP per unit dari harga_beli, bukan harga_modal (= HPP × stok)', async () => {
+  const { planImport } = await import('../src/lib/kasirpintar');
+  const plan = await planImport({ products: [
+    { id_barang: 'B1', nama_barang: 'buket bulat tumbelina', harga_jual: 360000, harga_beli: 150000, harga_modal: 149998950000, stok: 999993 },
+    { id_barang: 'B2', nama_barang: 'lama tanpa harga_beli', harga_jual: 200000, harga_beli: 0, harga_modal: 9999400000, stok: 99994 },
+    { id_barang: 'B3', nama_barang: 'Bloom XL', harga_jual: 250000, harga_beli: 245000, harga_modal: 0, stok: 0 },
+  ] }, 'outlet-utama', { importStock: true });
+  const cost = (id: string) => (plan.writes.find((w) => w.c === 'products' && w.id === id)!.patch as { cost: number }).cost;
+  assert.equal(cost('kp-B1'), 150000);
+  assert.equal(cost('kp-B2'), 100000, '9.999.400.000 ÷ 99.994 = 100.000');
+  assert.equal(cost('kp-B3'), 245000);
+});
+
+test('survei: bank ≥ 15 pertanyaan, diacak tanpa duplikat, hanya yang aktif', async () => {
+  const { DEFAULT_SURVEY, pickSurvey, surveyBank, answerOf, storeCfg } = await import('../src/lib/settings');
+  assert.ok(DEFAULT_SURVEY.length >= 15);
+  assert.equal(new Set(DEFAULT_SURVEY.map((q) => q.id)).size, DEFAULT_SURVEY.length, 'id unik');
+  assert.ok(DEFAULT_SURVEY.every((q) => q.options.length >= 2));
+  const seq = [0.99, 0.0, 0.5];
+  let i = 0;
+  const two = pickSurvey(DEFAULT_SURVEY, 2, () => seq[i++ % seq.length]);
+  assert.equal(two.length, 2);
+  assert.notEqual(two[0].id, two[1].id);
+  assert.equal(two[0].id, DEFAULT_SURVEY.at(-1)!.id, 'rnd 0,99 memilih elemen terakhir');
+  const bank = DEFAULT_SURVEY.map((q, k) => ({ ...q, active: k < 1 }));
+  assert.deepEqual(pickSurvey(bank, 2).map((q) => q.id), ['sumber'], 'hanya 1 aktif → 1 pertanyaan');
+  // ditarik 2.000 kali: semua 20 pertanyaan pernah muncul
+  const seen = new Set<string>();
+  for (let k = 0; k < 2000; k++) pickSurvey(DEFAULT_SURVEY, 2).forEach((q) => seen.add(q.id));
+  assert.equal(seen.size, DEFAULT_SURVEY.length);
+  // data v1.2: 2 pertanyaan tanpa id
+  const legacy = [{ q: 'Dari mana tahu toko kami?', options: ['Instagram'] }, { q: 'Warna favorit?', options: ['Pink', 'Putih'] }];
+  const up = surveyBank(legacy as any);
+  assert.equal(up[0].q, 'Warna favorit?');
+  assert.match(up[0].id, /^q-warna-favorit/);
+  assert.equal(up.length, DEFAULT_SURVEY.length + 1);
+  assert.equal(answerOf({ 'Dari mana tahu toko kami?': 'TikTok' }, DEFAULT_SURVEY[0]), 'TikTok', 'jawaban lama (kunci teks) tetap terbaca');
+  assert.equal(answerOf({ sumber: 'Instagram' }, DEFAULT_SURVEY[0]), 'Instagram');
+  assert.equal(storeCfg(null).engage.per_popup, 2);
 });

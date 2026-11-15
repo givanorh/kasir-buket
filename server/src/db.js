@@ -48,10 +48,49 @@ export function openDb(dataDir) {
       expires_at INTEGER NOT NULL,
       attempts INTEGER NOT NULL DEFAULT 0
     );
+    -- kode perangkat yang pernah dipakai (termasuk kode lama) agar nomor struk tidak pernah bentrok
+    CREATE TABLE IF NOT EXISTS device_codes (
+      code TEXT PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    -- undangan kalender yang pernah dikirim ke perangkai, satu baris per (pesanan, email)
+    CREATE TABLE IF NOT EXISTS cal_events (
+      order_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      florist TEXT,
+      uid TEXT NOT NULL,
+      seq INTEGER NOT NULL DEFAULT 0,
+      hash TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      sent INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (order_id, email)
+    );
+    -- antrean email notifikasi (dikirim berurutan, dicoba ulang dengan jeda bertambah)
+    CREATE TABLE IF NOT EXISTS notify_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      florist TEXT,
+      label TEXT,
+      kind TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_at INTEGER NOT NULL,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      sent_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS notify_jobs_due ON notify_jobs(status, next_at);
   `);
   // migrasi: kolom email pengguna (untuk reset kata sandi lewat email)
   const userCols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
   if (!userCols.includes('email')) db.exec('ALTER TABLE users ADD COLUMN email TEXT');
+  // migrasi: daftarkan kode perangkat yang sudah ada sebagai kode terpakai
+  db.exec('INSERT OR IGNORE INTO device_codes (code, device_id, created_at) SELECT code, id, created_at FROM devices');
 
   const kvGet = db.prepare('SELECT v FROM kv WHERE k = ?');
   const kvSet = db.prepare('INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v');

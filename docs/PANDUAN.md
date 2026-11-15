@@ -138,12 +138,33 @@ Sinkron berjalan sendiri. Lencana di kanan atas: hijau “Tersinkron”, kuning 
 
 ## 8. Ongkir, Perangkai, Poin, Ulasan, dan Survei
 1. **Lokasi toko** (sekali per cabang, owner): Pengaturan › Toko & cabang › tempel link Google Maps toko atau koordinat › Simpan.
-2. **Ongkir otomatis**: di Pembayaran pilih *Diantar*, tempel link Google Maps, Plus Code (mis. `VP3+PR Stabat`), atau koordinat dari pelanggan › **Hitung**. Rumus: ongkir = maks(Rp 15.000, km × Rp 3.000), km dibulatkan ke atas 0,1 km dan rupiah dibulatkan ke atas Rp 1.000. Jarak memakai rute jalan OpenStreetMap (layanan gratis OSRM lewat server); bila tidak tersedia, garis lurus × 1,3 dan ditandai "Perkiraan". Nominal tetap bisa diubah kasir. Tarif, minimum, dan pembulatan diatur owner di Pengaturan › Promo, poin & ongkir.
-3. **Perangkai**: pilih Iin Ruslinda, Nazra, Fira, atau Mirna saat pembayaran. Nama tercetak di tiket produksi, bisa difilter di menu Produksi, dan muncul di Laporan › Analisis (beban kerja). Daftar nama diatur owner.
-4. **Poin loyalitas**: bawaan 1 poin per Rp 10.000 (tanpa ongkir), 1 poin = Rp 100, minimal tukar 50 poin; tingkat Silver ≥ Rp 1 jt dan Gold ≥ Rp 3 jt belanja 12 bulan. Poin muncul di kasir saat nomor HP pelanggan dikenali, dan profil lengkap ada di menu Pelanggan.
-5. **Pop-up ulasan & survei**: muncul di kasir setiap N transaksi per perangkat (bawaan 5). Berisi QR ulasan Google Maps, pilihan diskon Rp 5.000–10.000, dan 2 pertanyaan survei. Hasil survei ada di Laporan › Analisis penjualan.
-6. **Admin & cabang**: buat akun Admin (Tiara, Ririn di Toko Utama; Putri di Cabang 1) di Pengaturan › Pengguna dan pilih cabangnya. Perangkat otomatis mengikuti cabang akun yang masuk. Tambah cabang di Pengaturan › Toko & cabang.
-7. **Ganti akun / keluar**: ketuk nama di kanan atas.
+2. **Kunci OpenRouteService** (sekali, owner): daftar gratis di account.heigit.org › buat API key › tempel di Pengaturan › Promo, poin & ongkir › Rute jalan kendaraan › Simpan kunci › Uji rute. Kuota gratis 2.000 rute per hari dan 40 per menit. Kunci hanya tersimpan di server.
+3. **Ongkir otomatis**: di Pembayaran pilih *Diantar*, tempel link Google Maps, Plus Code (mis. `VP3+PR Stabat`), atau koordinat dari pelanggan › **Hitung**.
+   - Jarak = rute jalan kendaraan (profil mobil) dari OpenRouteService. Bila kunci belum ada atau kuota habis, server memakai OSRM sebagai cadangan.
+   - Bila keduanya gagal, aplikasi meminta kasir mengisi km manual (lihat jarak rute di Google Maps). Tidak ada lagi perkiraan garis lurus.
+   - Rumus: ongkir = maks(Rp 15.000, km × Rp 3.000), km dibulatkan ke atas 0,1 km, rupiah dibulatkan ke atas Rp 1.000. Contoh 7,38 km → 7,4 km × 3.000 = 22.200 → Rp 23.000.
+4. **Perangkai & notifikasi** (owner, Pengaturan › Perangkai): isi nama dan Gmail tiap perangkai › Simpan.
+   - Saat perangkai ditunjuk (di kasir atau di detail pesanan), server mengirim email tugas berisi undangan kalender ±15 detik kemudian. Acara muncul di Google Calendar perangkai, berakhir pada jadwal ambil/antar dan dimulai sesuai "durasi rangkai" (bawaan 60 menit).
+   - Jadwal, item, catatan, atau kartu ucapan berubah: undangan diperbarui. Perangkai diganti: undangan lama dibatalkan dan perangkai baru menerima undangan. Pesanan dibatalkan: undangan dibatalkan dan acara hilang dari kalendernya.
+   - Syarat: email pengirim sudah diatur (Pengaturan › Email). Sekali per perangkai: simpan alamat Gmail toko di Kontak Google perangkai, atau di Google Calendar › Setelan › Setelan acara › "Tambahkan undangan ke kalender saya" pilih "Dari semua orang". Pastikan dengan tombol **Uji** lalu **Batalkan uji**.
+   - Riwayat pengiriman (terkirim, menunggu, gagal) tampil di tab yang sama. Gagal kirim dicoba ulang otomatis sampai 8 kali dengan jeda 30 detik s.d. 1 jam.
+5. **Poin loyalitas**: bawaan 1 poin per Rp 10.000 (tanpa ongkir), 1 poin = Rp 100, minimal tukar 50 poin; tingkat Silver ≥ Rp 1 jt dan Gold ≥ Rp 3 jt belanja 12 bulan. Poin muncul di kasir saat nomor HP pelanggan dikenali, dan profil lengkap ada di menu Pelanggan.
+6. **Pop-up ulasan & survei**: muncul di kasir setiap N transaksi per perangkat (bawaan 5). Berisi QR ulasan Google Maps, pilihan diskon Rp 5.000–10.000, dan 1–2 pertanyaan yang diacak dari bank pertanyaan.
+7. **Bank survei** (owner, Pengaturan › Survei): 20 pertanyaan bawaan (sumber info, acara, penerima, budget, frekuensi, alasan memilih, minat produk, kanal pesan, pesaing, waktu pesan, waktu tunggu, antar, media sosial, cara bayar, kepuasan, rekomendasi, domisili, usia, produk tambahan, promo). Bisa diubah, ditambah, dihapus, atau dinonaktifkan. Jumlah jawaban per pertanyaan tampil di tab itu; rinciannya di Laporan › Analisis penjualan.
+8. **Admin & cabang**: buat akun Admin (Tiara, Ririn di Toko Utama; Putri di Cabang 1) di Pengaturan › Pengguna dan pilih cabangnya. Perangkat otomatis mengikuti cabang akun yang masuk. Tambah cabang di Pengaturan › Toko & cabang.
+9. **Ganti akun / keluar**: ketuk nama di kanan atas.
+10. **Kode perangkat** (awalan nomor struk): huruf jenis + huruf fungsi.
+
+    | Kode | Arti | Contoh nomor struk |
+    |---|---|---|
+    | KK | Komputer Kasir | 261115-KK001 |
+    | HK | HP Kasir | 261115-HK001 |
+    | TK | Tablet Kasir | 261115-TK001 |
+    | KR / HR / TR | Komputer / HP / Tablet Ruang Rangkai | 261115-HR001 |
+    | KO / HO / TO | Komputer / HP / Tablet Owner | 261115-HO001 |
+
+    Dipilih di layar masuk, atau diubah di Pengaturan › Perangkat. Perangkat sejenis kedua menjadi KK2, ketiga KK3. Kode yang pernah dipakai tidak diberikan ke perangkat lain, sehingga nomor struk tidak pernah kembar. Nomor struk lama (mis. 261115-A001) tidak berubah.
+11. **HPP hasil impor**: bila menu Produk menampilkan peringatan "HPP lebih besar dari harga jual", tekan **Perbaiki HPP**. Impor versi lama membaca nilai modal total Kasir Pintar (HPP × stok); perbaikan membagi nilai itu dengan stok awal impor. Contoh: Rp 149.998.950.000 ÷ 999.993 = Rp 150.000.
 
 ## 9. Lupa Kata Sandi
 1. **Lewat email (disarankan).** Owner mengatur sekali: Pengaturan › Email › isi Gmail toko dan *app password* (Akun Google › Keamanan › Verifikasi 2 Langkah aktif › myaccount.google.com/apppasswords) › Simpan › Kirim email uji. Lalu isi email tiap pengguna di Pengaturan › Pengguna. Di halaman masuk, ketuk **Lupa kata sandi?**, masukkan username atau email, masukkan kode 6 digit dari email (berlaku 15 menit), lalu buat sandi baru.
@@ -170,3 +191,7 @@ Setiap basis data punya ID unik. Bila perangkat masuk ke server dengan ID berbed
 - **Stasiun cetak**: perangkat yang otomatis mencetak tugas cetak kiriman perangkat lain.
 - **Port 9100**: port standar pencetakan mentah (raw) pada printer jaringan.
 - **DHCP reservation**: pengaturan router agar perangkat tertentu selalu mendapat IP yang sama.
+- **OpenRouteService (ORS)**: layanan rute gratis berbasis OpenStreetMap dari HeiGIT (Universitas Heidelberg); dipakai untuk jarak rute jalan kendaraan.
+- **OSRM (Open Source Routing Machine)**: mesin rute OpenStreetMap; server demonya dipakai sebagai cadangan.
+- **Undangan kalender (iCalendar/ICS)**: format standar acara kalender. Email berisi undangan REQUEST membuat atau memperbarui acara; CANCEL dengan ID acara yang sama menghapusnya.
+- **HPP (harga pokok penjualan)**: modal per unit produk.
