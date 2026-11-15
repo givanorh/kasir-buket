@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../lib/db';
 import { customerStats } from '../lib/calc';
-import { fmtDate, fmtShort, num, rp } from '../lib/format';
+import { fmtDate, fmtShort, memberNo, num, rp } from '../lib/format';
 import { newId, save } from '../lib/store';
 import { storeCfg } from '../lib/settings';
 import { printOrder } from '../lib/print';
@@ -24,6 +24,7 @@ export default function Pelanggan() {
   const [sel, setSel] = useState<string | null>(null);
   const [edit, setEdit] = useState<Customer | null>(null);
   const [sort, setSort] = useState<'belanja' | 'poin' | 'terbaru'>('belanja');
+  const [onlyMember, setOnlyMember] = useState(false);
 
   const paid = useMemo(() => {
     const m = new Map<string, number>();
@@ -33,7 +34,7 @@ export default function Pelanggan() {
   const stats = useMemo(() => new Map(customers.map((c) => [c.id, customerStats(c.id, orders, paid, L)])), [customers, orders, paid, L]);
 
   const list = customers
-    .filter((c) => !c.deleted && (!q || c.name.toLowerCase().includes(q.toLowerCase()) || (c.phone || '').includes(q)))
+    .filter((c) => !c.deleted && (!onlyMember || c.member) && (!q || c.name.toLowerCase().includes(q.toLowerCase()) || (c.phone || '').includes(q)))
     .sort((a, b) => {
       const x = stats.get(a.id)!, y = stats.get(b.id)!;
       if (sort === 'poin') return y.balance - x.balance;
@@ -53,6 +54,7 @@ export default function Pelanggan() {
           <option value="poin">Urut: poin terbanyak</option>
           <option value="terbaru">Urut: belanja terakhir</option>
         </select>
+        <label className="check"><input type="checkbox" checked={onlyMember} onChange={(e) => setOnlyMember(e.target.checked)} />Member saja ({customers.filter((c) => c.member && !c.deleted).length})</label>
         <button className="btn primary" onClick={() => setEdit({ id: '', name: '', phone: '' })}><Icon name="plus" size={18} />Pelanggan</button>
       </div>
       <div className="crm">
@@ -62,8 +64,8 @@ export default function Pelanggan() {
             return (
               <div key={c.id} role="button" tabIndex={0} className={`trow click ${sel === c.id ? 'sel' : ''}`} onClick={() => setSel(c.id)} onKeyDown={(e) => e.key === 'Enter' && setSel(c.id)}>
                 <span className="avatar">{initials(c.name)}</span>
-                <div className="grow"><b>{c.name}</b><div className="muted">{c.phone || 'tanpa nomor'} · {s.count} transaksi</div></div>
-                <div className="right"><b>{rp(s.spend)}</b><div className="muted">{num(s.balance)} poin</div></div>
+                <div className="grow"><b>{c.name}</b> {c.member && <Badge tone="rose">member</Badge>}<div className="muted">{c.phone || 'tanpa nomor'} · {s.count} transaksi</div></div>
+                <div className="right"><b>{rp(s.spend)}</b><div className="muted">{c.member ? `${num(s.balance)} poin` : 'bukan member'}</div></div>
               </div>
             );
           })}
@@ -75,11 +77,14 @@ export default function Pelanggan() {
             <div className="profile-head">
               <span className="avatar">{initials(cur.name)}</span>
               <div className="grow">
-                <h2 style={{ fontSize: 20 }}>{cur.name} {tierBadge(st.tier)}</h2>
+                <h2 style={{ fontSize: 20 }}>{cur.name} {tierBadge(st.tier)} {cur.member ? <Badge tone="rose">member {cur.phone}</Badge> : <Badge>bukan member</Badge>}</h2>
                 <div className="muted">{cur.phone || 'tanpa nomor'}{cur.instagram ? ` · IG ${cur.instagram}` : ''}{cur.birthday ? ` · ulang tahun ${fmtDate(cur.birthday).replace(/^\w+, /, '')}` : ''}</div>
               </div>
+              {!cur.member && <button className="btn small primary" disabled={!memberNo(cur.phone)} title={memberNo(cur.phone) ? '' : 'Isi nomor HP dulu'} data-testid="jadikan-member"
+                onClick={async () => { await save<Customer>('customers', cur.id, { member: true, member_since: new Date().toISOString(), phone: memberNo(cur.phone) }); toast(`${cur.name} terdaftar sebagai member ${memberNo(cur.phone)}`); }}>Daftarkan member</button>}
               <button className="btn small" onClick={() => setEdit(cur)}>Ubah</button>
             </div>
+            {!cur.member && <div className="note warn small">Bukan member: transaksi tidak mendapat poin dan poin tidak bisa ditukar. Nomor member = nomor HP{memberNo(cur.phone) ? ` (${memberNo(cur.phone)})` : ''}.{st.balance > 0 ? ` Saldo lama ${num(st.balance)} poin aktif setelah terdaftar.` : ''}</div>}
             <div className="stats">
               <div className="stat"><span>Saldo poin</span><b data-testid="poin">{num(st.balance)}</b><div className="muted small">nilai {rp(st.balance * L.point_value)}</div></div>
               <div className="stat"><span>Total belanja</span><b>{rp(st.spend)}</b><div className="muted small">{st.count} transaksi · rata-rata {rp(st.avg)}</div></div>
@@ -127,7 +132,9 @@ function CustomerForm({ c, onClose, onSaved }: { c: Customer; onClose: () => voi
       footer={<button className="btn primary grow" disabled={!f.name} onClick={async () => {
         const { id, created_at, updated_at, ...patch } = f;
         const nid = c.id || newId('c');
-        await save<Customer>('customers', nid, { ...patch, phone: (f.phone || '').replace(/[^\d+]/g, '') });
+        const mn = memberNo(f.phone);
+        if (f.member && !mn) { toast('Member wajib punya nomor HP yang valid (08…)', 'err'); return; }
+        await save<Customer>('customers', nid, { ...patch, phone: mn || (f.phone || '').replace(/[^\d+]/g, ''), member_since: f.member ? f.member_since || new Date().toISOString() : f.member_since });
         onSaved(nid);
         onClose();
       }}>Simpan</button>}>
@@ -137,6 +144,7 @@ function CustomerForm({ c, onClose, onSaved }: { c: Customer; onClose: () => voi
           <Field label="Nomor HP/WA"><input inputMode="tel" value={f.phone || ''} onChange={(e) => setF({ ...f, phone: e.target.value })} /></Field>
           <Field label="Instagram"><input value={f.instagram || ''} onChange={(e) => setF({ ...f, instagram: e.target.value })} placeholder="@nama" /></Field>
         </div>
+        <label className="check"><input type="checkbox" checked={!!f.member} onChange={(e) => setF({ ...f, member: e.target.checked })} />Member (nomor member = nomor HP{memberNo(f.phone) ? ` ${memberNo(f.phone)}` : ''}); hanya member yang mendapat poin</label>
         <Field label="Tanggal lahir" hint="Untuk ucapan dan promo ulang tahun"><input type="date" value={f.birthday || ''} onChange={(e) => setF({ ...f, birthday: e.target.value })} /></Field>
         <Field label="Alamat"><textarea rows={2} value={f.address || ''} onChange={(e) => setF({ ...f, address: e.target.value })} /></Field>
         <Field label="Catatan" hint="Mis. tanggal penting, warna favorit"><textarea rows={2} value={f.note || ''} onChange={(e) => setF({ ...f, note: e.target.value })} /></Field>

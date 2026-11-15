@@ -3,7 +3,8 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../lib/db';
 import { paymentStatus } from '../lib/calc';
 import { addDays, endOfDay, fmtDateTime, fmtShort, rp, startOfDay } from '../lib/format';
-import { addPayment, setProductionStatus, voidOrder } from '../lib/store';
+import { addPayment, decideCancel, requestCancel, setProductionStatus, voidOrder, withdrawCancel } from '../lib/store';
+import { CancelRequests } from '../components/Alerts';
 import { printOrder } from '../lib/print';
 import { useSession } from '../lib/session';
 import { Badge, Empty, Field, Modal, MoneyInput, Seg, toast } from '../components/ui';
@@ -44,8 +45,10 @@ export default function Pesanan() {
   }, [orders, filter, q, paid]);
   const sel = orders.find((o) => o.id === open);
 
+  const isOwner = useSession().user?.role === 'owner';
   return (
     <div className="page">
+      {isOwner && <CancelRequests onOpen={setOpen} />}
       <div className="toolbar">
         <Seg value={filter} onChange={setFilter} options={[{ value: 'hari', label: 'Hari ini' }, { value: 'jadwal', label: 'Jadwal' }, { value: 'piutang', label: 'Belum lunas' }, { value: '30', label: '30 hari' }]} />
         <input className="grow" placeholder="Cari no / nama / HP" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -74,9 +77,29 @@ export default function Pesanan() {
   );
 }
 
+const REASONS = ['Pelanggan membatalkan', 'Salah input', 'Bahan tidak tersedia', 'Pesanan dobel', 'Tidak bisa diantar'];
+
+function CancelModal({ mode, order, onClose, onSubmit }: { mode: 'void' | 'request'; order: Order; onClose: () => void; onSubmit: (reason: string) => Promise<void> }) {
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  return (
+    <Modal title={mode === 'request' ? `Ajukan pembatalan ${order.no}` : `Batalkan ${order.no}`} onClose={onClose}
+      footer={<button className="btn danger grow" disabled={busy || reason.trim().length < 3} data-testid="kirim-batal"
+        onClick={async () => { setBusy(true); try { await onSubmit(reason); } finally { setBusy(false); } }}>
+        {mode === 'request' ? 'Kirim pengajuan ke owner' : 'Batalkan transaksi'}</button>}>
+      <div className="stack">
+        <p className="muted">{mode === 'request' ? `Pesanan ini sudah lunas (${rp(order.total)}). Owner menerima pengajuan beserta alasan, lalu menyetujui atau menolak.` : 'Pesanan dan pembayarannya dibatalkan; stok produk dikembalikan.'}</p>
+        <div className="chips small">{REASONS.map((r) => <button key={r} className={reason === r ? 'on' : ''} onClick={() => setReason(r)}>{r}</button>)}</div>
+        <Field label="Alasan (wajib)"><textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} data-testid="alasan-batal" /></Field>
+      </div>
+    </Modal>
+  );
+}
+
 export function OrderDetail({ order, onClose }: { order: Order; onClose: () => void }) {
   const s = useSession();
-  const payments = useLiveQuery(() => db.payments.where('order_id').equals(order.id).toArray(), [order.id]) || [];
+  const paymentsQ = useLiveQuery(() => db.payments.where('order_id').equals(order.id).toArray(), [order.id]);
+  const payments = paymentsQ || [];
   const settings = useLiveQuery(() => db.settings.get('toko'));
   const paid = payments.filter((p) => !p.void).reduce((a, p) => a + p.amount, 0);
   const due = Math.max(0, order.total - paid);
@@ -88,11 +111,21 @@ export function OrderDetail({ order, onClose }: { order: Order; onClose: () => v
     const amt = await addPayment(order, method, payAmt || due);
     if (amt) { toast(`Pembayaran ${rp(amt)} dicatat`); setPayAmt(0); }
   }
-  async function doVoid() {
-    const reason = window.prompt('Alasan pembatalan transaksi ini?');
-    if (!reason) return;
-    await voidOrder(order, reason);
-    toast('Transaksi dibatalkan');
+  const owner = s.user?.role === 'owner';
+  const lunas = order.total > 0 && paid >= order.total;
+  const cr = order.cancel_request;
+  const pending = cr?.status === 'pending';
+  const [cancelMode, setCancelMode] = useState<'void' | 'request' | null>(null);
+  async function submitCancel(reason: string) {
+    if (cancelMode === 'request') { await requestCancel(order, reason); toast('Pengajuan pembatalan dikirim ke owner'); }
+    else { await voidOrder(order, reason); toast('Transaksi dibatalkan'); }
+    setCancelMode(null);
+  }
+  async function decide(ok: boolean) {
+    const note = ok ? '' : window.prompt('Alasan menolak (opsional)') ?? null;
+    if (note === null) return;
+    await decideCancel(order, ok, note);
+    toast(ok ? 'Pesanan dibatalkan' : 'Pengajuan ditolak');
   }
   async function reprint(t: 'kasir' | 'produksi') {
     const r = await printOrder(order, [t], { copyLabel: t === 'kasir' ? 'CETAK ULANG' : undefined });
@@ -151,9 +184,27 @@ export function OrderDetail({ order, onClose }: { order: Order; onClose: () => v
             <button onClick={() => reprint('kasir')}>Struk</button>
             <button onClick={() => reprint('produksi')}>Tiket produksi</button>
           </div>
-          {canEdit && !order.void && <button className="btn danger" onClick={doVoid}>Batalkan transaksi</button>}
+          {pending && !order.void && (
+            <div className="note warn" data-testid="cancel-pending">
+              <b>Pengajuan pembatalan oleh {cr!.by_name}</b> ({fmtShort(cr!.at)}): “{cr!.reason}”
+              {owner ? (
+                <div className="btns" style={{ marginTop: 8 }}>
+                  <button className="btn small" onClick={() => decide(false)}>Tolak</button>
+                  <button className="btn small danger" onClick={() => decide(true)} data-testid="setujui-batal-detail">Setujui &amp; batalkan</button>
+                </div>
+              ) : <div className="btns" style={{ marginTop: 8 }}><span className="muted">Menunggu persetujuan owner.</span><button className="btn small ghost" onClick={() => withdrawCancel(order)}>Tarik pengajuan</button></div>}
+            </div>
+          )}
+          {cr?.status === 'rejected' && !order.void && <div className="note small">Pengajuan pembatalan ditolak {cr.decided_by_name}{cr.decision_note ? `: ${cr.decision_note}` : ''}.</div>}
+          {canEdit && !order.void && !pending && paymentsQ && (
+            owner || !lunas
+              ? <button className="btn danger" onClick={() => setCancelMode('void')} data-testid="btn-batal">Batalkan transaksi</button>
+              : <button className="btn danger" onClick={() => setCancelMode('request')} data-testid="btn-ajukan-batal">Ajukan pembatalan ke owner</button>
+          )}
+          {canEdit && !owner && lunas && !order.void && !pending && <p className="muted small">Pesanan sudah lunas: pembatalan butuh persetujuan owner.</p>}
         </div>
       </div>
+      {cancelMode && <CancelModal mode={cancelMode} order={order} onClose={() => setCancelMode(null)} onSubmit={submitCancel} />}
     </Modal>
   );
 }

@@ -3,6 +3,7 @@ import { db, getMeta, setMeta } from './db';
 import { getSession } from './session';
 import { sync } from './sync';
 import { cartTotals, paidOf } from './calc';
+import { memberNo } from './format';
 import type {
   CashMove, Collection, Customer, Fulfillment, Order, OrderItem, Payment, PrintJob, PrintTarget, ProductionStatus, Shift, StockMove,
 } from './types';
@@ -112,7 +113,7 @@ export interface CheckoutInput {
   items: OrderItem[];
   orderDiscount: number;
   extraFee: number;
-  customer: { id?: string | null; name: string; phone: string };
+  customer: { id?: string | null; name: string; phone: string; registerMember?: boolean };
   fulfillment: Fulfillment;
   dueAt: string | null;
   recipientName: string;
@@ -141,14 +142,21 @@ export async function checkout(inp: CheckoutInput): Promise<Order> {
   const ts = nowIso();
   const writes: { c: Collection; id: string; patch: Record<string, unknown> }[] = [];
 
-  // pelanggan: pakai yang ada (berdasar nomor HP) atau buat baru bila nama/HP diisi
+  // pelanggan: pakai yang ada (berdasar nomor HP ternormalisasi) atau buat baru bila nama/HP diisi
   let customerId = inp.customer.id || null;
-  const phone = inp.customer.phone.replace(/[^\d+]/g, '');
-  if (!customerId && phone) customerId = (await db.customers.where('phone').equals(phone).first())?.id || null;
+  const mn = memberNo(inp.customer.phone);
+  const phone = mn || inp.customer.phone.replace(/[^\d+]/g, '');
+  let existing = customerId ? await db.customers.get(customerId) : undefined;
+  if (!existing && mn) existing = (await db.customers.where('phone').equals(mn).first()) || (await db.customers.filter((c) => !c.deleted && memberNo(c.phone) === mn).first());
+  if (existing) customerId = existing.id;
   if (!customerId && (inp.customer.name.trim() || phone)) {
     customerId = newId('c');
     writes.push({ c: 'customers', id: customerId, patch: { name: inp.customer.name.trim() || phone, phone } satisfies Partial<Customer> });
   }
+  // member: nomor member = nomor HP. Hanya member yang mendapat/menukar poin.
+  const registering = !!(inp.customer.registerMember && mn && customerId && !existing?.member);
+  if (registering) writes.push({ c: 'customers', id: customerId!, patch: { member: true, member_since: ts, phone: mn } satisfies Partial<Customer> });
+  const isMember = !!(existing?.member || registering);
 
   const payAmount = Math.max(0, Math.min(inp.payAmount, t.total));
   const orderId = newId('o');
@@ -180,11 +188,11 @@ export async function checkout(inp: CheckoutInput): Promise<Order> {
     florist: inp.florist || '',
     delivery: inp.fulfillment === 'antar' ? inp.delivery || null : null,
     manual_discount: inp.manualDiscount || 0,
-    points_redeemed: customerId ? inp.pointsRedeemed || 0 : 0,
-    points_discount: customerId ? inp.pointsDiscount || 0 : 0,
+    points_redeemed: isMember ? inp.pointsRedeemed || 0 : 0,
+    points_discount: isMember ? inp.pointsDiscount || 0 : 0,
     review_discount: inp.reviewDiscount || 0,
     survey: inp.survey && Object.keys(inp.survey).length ? inp.survey : undefined,
-    points_earned: customerId ? inp.pointsEarned || 0 : 0,
+    points_earned: isMember ? inp.pointsEarned || 0 : 0,
   };
   delete (order as any).qty;
   writes.push({ c: 'orders', id: orderId, patch: order as any });
@@ -241,10 +249,10 @@ export async function setProductionStatus(order: Order, status: ProductionStatus
   await save<Order>('orders', order.id, patch);
 }
 
-export async function voidOrder(order: Order, reason: string) {
+export async function voidOrder(order: Order, reason: string, extra: Partial<Order> = {}) {
   const ts = nowIso();
   const writes: { c: Collection; id: string; patch: Record<string, unknown> }[] = [
-    { c: 'orders', id: order.id, patch: { void: true, void_reason: reason, void_at: ts, production_status: 'batal' } },
+    { c: 'orders', id: order.id, patch: { void: true, void_reason: reason, void_at: ts, production_status: 'batal', ...extra } },
   ];
   for (const p of await db.payments.where('order_id').equals(order.id).toArray()) {
     if (!p.void) writes.push({ c: 'payments', id: p.id, patch: { void: true } });
@@ -254,6 +262,24 @@ export async function voidOrder(order: Order, reason: string) {
     writes.push({ c: 'stock_moves', id: newId('m'), patch: { product_id: m.product_id, outlet_id: m.outlet_id, qty: -m.qty, reason: 'batal', ref_id: order.id } });
   }
   await saveMany(writes);
+}
+
+/** Admin: ajukan pembatalan pesanan lunas ke owner (wajib beralasan). */
+export async function requestCancel(order: Order, reason: string) {
+  const u = getSession().user;
+  await save<Order>('orders', order.id, { cancel_request: { status: 'pending', reason: reason.trim(), by: u?.id || '', by_name: u?.name || '', at: nowIso() } });
+}
+export async function withdrawCancel(order: Order) {
+  await save<Order>('orders', order.id, { cancel_request: null });
+}
+/** Owner: setujui (pesanan & pembayaran dibatalkan) atau tolak pengajuan. */
+export async function decideCancel(order: Order, approve: boolean, note = '') {
+  const u = getSession().user;
+  const cr = order.cancel_request;
+  if (!cr) return;
+  const decided = { ...cr, status: approve ? 'approved' as const : 'rejected' as const, decided_by: u?.id, decided_by_name: u?.name, decided_at: nowIso(), decision_note: note.trim() };
+  if (approve) await voidOrder(order, `${cr.reason} (diajukan ${cr.by_name}, disetujui ${u?.name || 'owner'})`, { cancel_request: decided });
+  else await save<Order>('orders', order.id, { cancel_request: decided });
 }
 
 export async function addCashMove(m: Omit<CashMove, 'id' | 'outlet_id' | 'shift_id' | 'user_id'>) {

@@ -85,12 +85,14 @@ async function docFor(order: Order, kind: 'struk' | 'tiket', copyLabel?: string)
   if (kind === 'tiket') return buildTiket(order, st);
   const pays = await db.payments.where('order_id').equals(order.id).toArray();
   let pointsBalance: number | undefined;
-  if (order.customer_id) {
-    const mine = (await db.orders.where('customer_id').equals(order.customer_id).toArray()).filter((o) => !o.void);
+  let memberNo: string | undefined;
+  const cust = order.customer_id ? await db.customers.get(order.customer_id) : undefined;
+  if (cust?.member) {
+    memberNo = cust.phone;
+    const mine = (await db.orders.where('customer_id').equals(cust.id).toArray()).filter((o) => !o.void);
     pointsBalance = mine.reduce((s, o) => s + (o.points_earned || 0) - (o.points_redeemed || 0), 0);
-    if (!mine.some((o) => o.points_earned || o.points_redeemed)) pointsBalance = undefined;
   }
-  return buildStruk(order, pays, st, { copyLabel, pointsBalance });
+  return buildStruk(order, pays, st, { copyLabel, pointsBalance, memberNo });
 }
 
 export interface PrintResult { target: PrintTarget; ok: boolean; mode: string; error?: string }

@@ -19,7 +19,7 @@ import { expandMapsUrl, roadDistanceKm, orsDistanceKm } from './geo.js';
 import { createNotifier } from './notify.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const VERSION = '1.3.0';
+export const VERSION = '1.4.0';
 
 const ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
 const ROLES = ['owner', 'kasir', 'perangkai'];
@@ -43,6 +43,8 @@ const RULES = {
   shifts: { write: ['owner', 'kasir'] },
   cash_moves: { write: ['owner', 'kasir'] },
   print_jobs: { write: ['owner', 'kasir', 'perangkai'] },
+  purchases: { write: ['owner'] },
+  events: { write: ['owner'] },
 };
 const SERVER_FIELDS = new Set(['id', 'updated_at', 'updated_by']);
 
@@ -83,6 +85,9 @@ export function createServer(opts = {}) {
     setDeviceCode: db.prepare('UPDATE devices SET code = ?, name = ? WHERE id = ?'),
     insertDevice: db.prepare('INSERT INTO devices (id, code, name, user_id, outlet_id, created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)'),
     touchDevice: db.prepare('UPDATE devices SET last_seen = ?, user_id = ?, name = COALESCE(?, name) WHERE id = ?'),
+    paidSum: db.prepare(`SELECT COALESCE(SUM(json_extract(data, '$.amount')), 0) AS s FROM records WHERE c = 'payments' AND del = 0
+      AND json_extract(data, '$.order_id') = ? AND COALESCE(json_extract(data, '$.void'), 0) = 0`),
+    owners: db.prepare("SELECT name, email FROM users WHERE role = 'owner' AND active = 1 AND email IS NOT NULL AND email != ''"),
   };
 
   const now = () => new Date().toISOString();
@@ -456,11 +461,55 @@ export function createServer(opts = {}) {
     return { changes, cursor, more: rows.length === limit, head: store.state.seq, instanceId: store.instanceId, serverTime: now() };
   }
 
+  /** Pesanan lunas: Σ pembayaran sah ≥ total dan belum dibatalkan. */
+  function fullyPaid(orderId) {
+    const r = q.getRec.get('orders', orderId);
+    if (!r || r.del) return false;
+    const o = JSON.parse(r.data);
+    return !o.void && o.total > 0 && Number(q.paidSum.get(orderId).s) >= o.total;
+  }
+  /** Aturan pembatalan untuk selain owner. Mengembalikan pesan galat bila ditolak. */
+  function guardCancel(c, id, patch, user) {
+    if (c === 'orders') {
+      if ((patch.void === true || patch.production_status === 'batal') && fullyPaid(id)) return 'Pesanan lunas hanya bisa dibatalkan owner. Ajukan pembatalan beserta alasan.';
+      if ('cancel_request' in patch && patch.cancel_request) {
+        const cr = patch.cancel_request;
+        if (cr.status !== 'pending') return 'Hanya owner yang boleh menyetujui atau menolak pembatalan';
+        if (!String(cr.reason || '').trim()) return 'Alasan pembatalan wajib diisi';
+        patch.cancel_request = { status: 'pending', reason: String(cr.reason).trim().slice(0, 500), by: user.id, by_name: user.name, at: now() };
+      }
+    }
+    if (c === 'payments' && patch.void === true) {
+      const r = q.getRec.get('payments', id);
+      const p = r ? JSON.parse(r.data) : null;
+      if (p && fullyPaid(p.order_id)) return 'Pembayaran pesanan lunas hanya bisa dibatalkan owner';
+    }
+    return null;
+  }
+  /** Email ke owner (yang punya email) saat Admin mengajukan pembatalan pesanan lunas. */
+  function mailOwnersCancel(orderId) {
+    const cfg = emailConfig();
+    const r = q.getRec.get('orders', orderId);
+    if (!cfg?.host || !r) return;
+    const o = JSON.parse(r.data);
+    const cr = o.cancel_request;
+    if (!cr || cr.status !== 'pending') return;
+    const rp = (n) => `Rp ${Number(n || 0).toLocaleString('id-ID')}`;
+    for (const ow of q.owners.all()) {
+      sendMailFn(cfg, {
+        to: ow.email,
+        subject: `Persetujuan pembatalan ${o.no} (${rp(o.total)})`,
+        text: `Halo ${ow.name},\n\n${cr.by_name} mengajukan pembatalan pesanan ${o.no} yang sudah lunas.\n\nPelanggan: ${o.customer_name || 'Umum'}\nTotal: ${rp(o.total)}\nItem: ${(o.items || []).map((i) => `${i.qty}x ${i.name}`).join(', ')}\nAlasan: ${cr.reason}\n\nBuka aplikasi › Pesanan untuk menyetujui atau menolak.\n\n${storeName()}\n`,
+      }).catch((e) => console.error('Email persetujuan pembatalan gagal:', e.message));
+    }
+  }
+
   function handlePush(user, body) {
     const changes = Array.isArray(body.changes) ? body.changes : null;
     if (!changes) throw new HttpError(400, 'Format push salah');
     if (changes.length > 1000) throw new HttpError(413, 'Maksimal 1000 perubahan per kiriman');
     const results = [];
+    const askOwner = [];
     store.tx(() => {
       for (const ch of changes) {
         const { c, id } = ch || {};
@@ -480,6 +529,11 @@ export function createServer(opts = {}) {
           if (!q.getRec.get(c, id)) { results.push({ c, id, error: 'Tidak punya izin membuat data ini' }); continue; }
           patch = Object.fromEntries(Object.entries(patch).filter(([k]) => allowed.includes(k)));
         }
+        if (user.role !== 'owner') {
+          const why = guardCancel(c, id, patch, user);
+          if (why) { results.push({ c, id, error: why }); continue; }
+          if (c === 'orders' && patch.cancel_request?.status === 'pending') askOwner.push(id);
+        }
         results.push({ c, id, seq: writeRecord(c, id, patch, user.id) });
       }
     });
@@ -488,6 +542,7 @@ export function createServer(opts = {}) {
       if (r.c !== 'orders' || !r.seq) continue;
       try { notifier.reconcileById(r.id); } catch (e) { console.error('Notifikasi perangkai:', e.message); }
     }
+    for (const id of askOwner) mailOwnersCancel(id);
     return { results, head: store.state.seq };
   }
 

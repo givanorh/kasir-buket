@@ -56,3 +56,14 @@ export function toLocalInput(iso?: string | Date | null) {
 export function fromLocalInput(v: string) {
   return v ? new Date(v).toISOString() : null;
 }
+
+/**
+ * Nomor member = nomor HP ternormalisasi: +62 812… / 62812… / 812… → 0812…
+ * Mengembalikan '' bila bukan nomor HP Indonesia yang wajar (08 + 7–12 digit).
+ */
+export function memberNo(phone?: string | null): string {
+  let d = String(phone || '').replace(/\D/g, '');
+  if (d.startsWith('62')) d = '0' + d.slice(2);
+  else if (d.startsWith('8')) d = '0' + d;
+  return /^08\d{7,12}$/.test(d) ? d : '';
+}

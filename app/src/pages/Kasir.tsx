@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import qrcode from 'qrcode-generator';
 import { db, getMeta, setMeta } from '../lib/db';
 import { cartTotals, pointsEarned, scheduledQtyOn } from '../lib/calc';
-import { addDays, dayKey, fmtDate, fromLocalInput, num, rp, toLocalInput } from '../lib/format';
+import { addDays, dayKey, fmtDate, fromLocalInput, memberNo, num, rp, toLocalInput } from '../lib/format';
 import { activeShift, checkout, getDeviceConfig, stockLevels, type CheckoutInput, type DeviceConfig } from '../lib/store';
 import { printOrder, type PrintResult } from '../lib/print';
 import { buildStruk, buildTiket } from '../lib/print/receipts';
@@ -58,6 +58,11 @@ export default function Kasir() {
     });
   }
   const setQty = (i: number, d: number) => setCart((c) => c.flatMap((x, j) => (j !== i ? [x] : x.qty + d <= 0 ? [] : [{ ...x, qty: x.qty + d }])));
+  /** Kurangi 1 dari baris terakhir produk ini (langsung dari kartu produk, tanpa membuka keranjang). */
+  const dec = (pid: string) => setCart((c) => {
+    const i = c.map((x) => x.product_id).lastIndexOf(pid);
+    return i < 0 ? c : c.flatMap((x, j) => (j !== i ? [x] : x.qty > 1 ? [{ ...x, qty: x.qty - 1 }] : []));
+  });
 
   async function startPay() {
     setPanel(false);
@@ -88,15 +93,23 @@ export default function Kasir() {
           const st = p.track_stock ? stock.get(p.id) || 0 : null;
           const n = inCart.get(p.id) || 0;
           return (
-            <button key={p.id} className={`pcard ${n ? 'in' : ''}`} onClick={() => add(p)} disabled={st !== null && st <= 0} data-testid="product-card">
-              <div className="pimg" style={{ background: p.photo ? `center/cover url(${p.photo})` : TINTS[i % TINTS.length] }}>{!p.photo && p.name.slice(0, 1)}</div>
-              <div className="pinfo">
-                <span className="pname">{p.name}</span>
-                <span className="pprice">{rp(p.price)}</span>
-                {st !== null && <span className={`pstock ${st <= (p.min_stock || 0) ? 'low' : ''}`}>Stok {st}</span>}
-              </div>
-              {n > 0 && <span className="pqty">{n}</span>}
-            </button>
+            <div key={p.id} className={`pwrap ${n ? 'in' : ''}`} data-testid="product-card">
+              <button className="pcard" onClick={() => add(p)} disabled={st !== null && st <= 0}>
+                <div className="pimg" style={{ background: p.photo ? `center/cover url(${p.photo})` : TINTS[i % TINTS.length] }}>{!p.photo && p.name.slice(0, 1)}</div>
+                <div className="pinfo">
+                  <span className="pname">{p.name}</span>
+                  <span className="pprice">{rp(p.price)}</span>
+                  {st !== null && <span className={`pstock ${st <= (p.min_stock || 0) ? 'low' : ''}`}>Stok {num(st)}</span>}
+                </div>
+              </button>
+              {n > 0 && (
+                <div className="pstep" data-testid="pstep">
+                  <button onClick={() => dec(p.id)} aria-label={`Kurangi ${p.name}`} data-testid="pstep-minus"><Icon name="minus" size={18} /></button>
+                  <span aria-live="polite">{n}</span>
+                  <button onClick={() => add(p)} disabled={st !== null && n >= st} aria-label={`Tambah ${p.name}`} data-testid="pstep-plus"><Icon name="plus" size={18} /></button>
+                </div>
+              )}
+            </div>
           );
         })}
         {!list.length && <div className="empty">Belum ada produk. Tambahkan di menu Produk, atau pakai Item custom.</div>}
@@ -245,7 +258,7 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
   const [f, setF] = useState({
     name: '', phone: '', customerId: '' as string, fulfillment: 'sekarang' as Fulfillment, due: toLocalInput(new Date(Date.now() + 3 * 3600e3)),
     recipient: '', recipientPhone: '', address: '', mapsInput: '', fee: 0, card: '', notes: '', disc: 0, florist: '',
-    method: 'Tunai', payType: 'lunas' as 'lunas' | 'dp' | 'nanti', dp: 0, received: 0, usePoints: false,
+    method: 'Tunai', payType: 'lunas' as 'lunas' | 'dp' | 'nanti', dp: 0, received: 0, usePoints: false, register: false,
   });
   const [geo, setGeo] = useState<{ point: LatLng | null; km: number; source: 'ors' | 'osrm' | 'manual'; minutes?: number } | null>(null);
   const [geoBusy, setGeoBusy] = useState(false);
@@ -253,19 +266,22 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
   const [busy, setBusy] = useState(false);
 
   // pelanggan & poin
-  const cust = customers.find((c) => c.id === f.customerId) || (f.phone.replace(/\D/g, '').length >= 8 ? customers.find((c) => c.phone && c.phone === f.phone.replace(/[^\d+]/g, '')) : undefined);
+  const mn = memberNo(f.phone);
+  const cust = customers.find((c) => c.id === f.customerId) || (mn ? customers.find((c) => !c.deleted && memberNo(c.phone) === mn) : undefined);
+  const custMn = memberNo(cust?.phone) || mn;
+  const isMember = !!cust?.member || (f.register && !!custMn);
   const custOrders = useLiveQuery(() => (cust ? db.orders.where('customer_id').equals(cust.id).toArray() : Promise.resolve([] as Order[])), [cust?.id]) || [];
   const balance = custOrders.filter((o) => !o.void).reduce((s, o) => s + (o.points_earned || 0) - (o.points_redeemed || 0), 0);
 
   const base = cartTotals(items);
   const goods = Math.max(0, base.subtotal - base.item_discount - f.disc - engage.reviewDiscount);
   const L = cfg.loyalty;
-  const maxRedeem = L.enabled && cust && balance >= L.min_redeem ? Math.min(balance, Math.floor(goods / L.point_value)) : 0;
+  const maxRedeem = L.enabled && cust && isMember && balance >= L.min_redeem ? Math.min(balance, Math.floor(goods / L.point_value)) : 0;
   const redeem = f.usePoints ? maxRedeem : 0;
   const pointsDisc = redeem * L.point_value;
   const fee = f.fulfillment === 'antar' ? f.fee : 0;
   const t = cartTotals(items, f.disc + engage.reviewDiscount + pointsDisc, fee);
-  const earn = cust || f.name || f.phone ? pointsEarned(t.total, fee, L) : 0;
+  const earn = isMember ? pointsEarned(t.total, fee, L) : 0; // poin hanya untuk member
   const payAmount = f.payType === 'lunas' ? t.total : f.payType === 'dp' ? Math.min(f.dp, t.total) : 0;
   const change = f.method === 'Tunai' ? Math.max(0, f.received - payAmount) : 0;
   const shortCash = f.method === 'Tunai' && payAmount > 0 && f.received > 0 && f.received < payAmount;
@@ -320,7 +336,7 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
     try {
       const input: CheckoutInput = {
         items, orderDiscount: f.disc + engage.reviewDiscount + pointsDisc, extraFee: fee,
-        customer: { id: cust?.id || null, name: f.name, phone: f.phone }, fulfillment: f.fulfillment, dueAt: dueIso,
+        customer: { id: cust?.id || null, name: f.name, phone: f.phone || cust?.phone || '', registerMember: f.register && !cust?.member }, fulfillment: f.fulfillment, dueAt: dueIso,
         recipientName: f.recipient, recipientPhone: f.recipientPhone, deliveryAddress: f.address,
         cardMessage: f.card, notes: f.notes, payMethod: f.method, payAmount, cashReceived: f.received || payAmount,
         florist: f.florist, manualDiscount: f.disc, reviewDiscount: engage.reviewDiscount, survey: engage.survey,
@@ -352,11 +368,21 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
           {matches.length > 0 && (
             <div className="chips small">{matches.map((c) => <button key={c.id} onClick={() => setF({ ...f, customerId: c.id, name: c.name, phone: c.phone || '', address: f.address || c.address || '' })}>{c.name} {c.phone}</button>)}</div>
           )}
-          {cust && L.enabled && (
-            <div className="loyal">
+          {L.enabled && cust?.member && (
+            <div className="loyal" data-testid="member">
               <Icon name="star" />
-              <div className="grow"><b>{num(balance)} poin</b><div className="muted">{maxRedeem ? `Bisa ditukar ${num(maxRedeem)} poin = ${rp(maxRedeem * L.point_value)}` : `Minimal tukar ${num(L.min_redeem)} poin`}</div></div>
+              <div className="grow"><b>Member {cust.phone} · {num(balance)} poin</b><div className="muted">{maxRedeem ? `Bisa ditukar ${num(maxRedeem)} poin = ${rp(maxRedeem * L.point_value)}` : `Minimal tukar ${num(L.min_redeem)} poin`}</div></div>
               {maxRedeem > 0 && <label className="check"><input type="checkbox" checked={f.usePoints} onChange={(e) => setF({ ...f, usePoints: e.target.checked })} />Tukar</label>}
+            </div>
+          )}
+          {L.enabled && !cust?.member && (f.name.trim() || f.phone.trim() || cust) && (
+            <div className="loyal off" data-testid="non-member">
+              <Icon name="star" />
+              <div className="grow">
+                <label className="check"><input type="checkbox" checked={f.register} disabled={!custMn} onChange={(e) => setF({ ...f, register: e.target.checked })} data-testid="daftar-member" />
+                  <span><b>Daftarkan member</b>{custMn ? ` · nomor member ${custMn}` : ''}</span></label>
+                <div className="muted">{!custMn ? 'Isi nomor HP yang valid (08…) untuk mendaftar member.' : f.register ? `Transaksi ini mendapat poin${balance > 0 ? `; saldo lama ${num(balance)} poin ikut aktif` : ''}.` : 'Bukan member: transaksi ini tidak mendapat poin.'}</div>
+              </div>
             </div>
           )}
 
@@ -448,7 +474,8 @@ export function Success({ order, results, onClose }: { order: Order; results: Pr
   }
   const mine = useLiveQuery(() => (order.customer_id ? db.orders.where('customer_id').equals(order.customer_id).toArray() : Promise.resolve([] as Order[])), [order.customer_id]) || [];
   const bal = mine.filter((o) => !o.void).reduce((s, o) => s + (o.points_earned || 0) - (o.points_redeemed || 0), 0);
-  const doc = show === 'struk' ? buildStruk(order, payments, settings, { pointsBalance: order.customer_id && (order.points_earned || bal) ? bal : undefined }) : buildTiket(order, settings);
+  const custRec = useLiveQuery(async () => (order.customer_id ? await db.customers.get(order.customer_id) : undefined), [order.customer_id]);
+  const doc = show === 'struk' ? buildStruk(order, payments, settings, custRec?.member ? { pointsBalance: bal, memberNo: custRec.phone } : {}) : buildTiket(order, settings);
   return (
     <Modal title="Transaksi tersimpan" onClose={onClose} wide footer={<button className="btn primary big grow" onClick={onClose} autoFocus data-testid="btn-baru">Transaksi baru</button>}>
       <div className="success">

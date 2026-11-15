@@ -216,3 +216,39 @@ test('MIME undangan: text/plain + text/calendar;method + lampiran .ics; baris IC
   assert.match(raw, /Content-Disposition: attachment; filename="undangan.ics"/);
   assert.ok(!/^\./m.test(raw), 'tidak ada baris diawali titik (aman untuk DATA SMTP)');
 });
+
+test('pesanan lunas: Admin tidak bisa membatalkan langsung; pengajuan beralasan + email ke owner; owner memutus', async () => {
+  const users = (await json('GET', '/api/users', null, owner)).body.users;
+  await json('PATCH', `/api/users/${users.find((u) => u.username === 'vano').id}`, { email: 'vano@example.com' }, owner);
+  await push([order('ord-020', { florist: '' }), { c: 'payments', id: 'pay-020', patch: { order_id: 'ord-020', amount: 300000, method: 'QRIS', kind: 'lunas', outlet_id: 'outlet-utama' } }]);
+  let r = await push([{ c: 'orders', id: 'ord-020', patch: { void: true, production_status: 'batal' } }, { c: 'payments', id: 'pay-020', patch: { void: true } }], kasir);
+  assert.match(r.body.results[0].error, /hanya bisa dibatalkan owner/);
+  assert.match(r.body.results[1].error, /hanya bisa dibatalkan owner/);
+  r = await push([{ c: 'orders', id: 'ord-020', patch: { cancel_request: { status: 'approved', reason: 'x' } } }], kasir);
+  assert.match(r.body.results[0].error, /Hanya owner/);
+  r = await push([{ c: 'orders', id: 'ord-020', patch: { cancel_request: { status: 'pending', reason: '  ' } } }], kasir);
+  assert.match(r.body.results[0].error, /Alasan/);
+  const n = mails.length;
+  r = await push([{ c: 'orders', id: 'ord-020', patch: { cancel_request: { status: 'pending', reason: 'Pelanggan salah pilih warna', by: 'palsu', by_name: 'Palsu' } } }], kasir);
+  assert.ok(r.body.results[0].seq);
+  await new Promise((res) => setTimeout(res, 30));
+  const m = mails.slice(n).find((x) => x.to === 'vano@example.com');
+  assert.match(m.subject, /^Persetujuan pembatalan 261115-KK020 \(Rp 300\.000\)$/);
+  assert.match(m.text, /Tiara mengajukan pembatalan/);
+  assert.match(m.text, /Alasan: Pelanggan salah pilih warna/);
+  const rec = (await json('GET', '/api/sync/pull?since=0&limit=2000', null, owner)).body.changes.filter((x) => x.id === 'ord-020').at(-1).data;
+  assert.equal(rec.cancel_request.by_name, 'Tiara', 'pengaju diisi server, bukan dari klien');
+  r = await push([{ c: 'orders', id: 'ord-020', patch: { void: true, production_status: 'batal', cancel_request: { ...rec.cancel_request, status: 'approved', decided_by_name: 'Vano' } } }, { c: 'payments', id: 'pay-020', patch: { void: true } }], owner);
+  assert.ok(r.body.results.every((x) => x.seq), 'owner menyetujui: pesanan & pembayaran batal');
+  // pesanan DP (belum lunas) tetap bisa dibatalkan Admin langsung
+  await push([order('ord-021', { florist: '' }), { c: 'payments', id: 'pay-021', patch: { order_id: 'ord-021', amount: 100000, method: 'Tunai', kind: 'dp', outlet_id: 'outlet-utama' } }]);
+  r = await push([{ c: 'orders', id: 'ord-021', patch: { void: true, production_status: 'batal', void_reason: 'batal' } }, { c: 'payments', id: 'pay-021', patch: { void: true } }], kasir);
+  assert.ok(r.body.results.every((x) => x.seq));
+});
+
+test('belanja bahan & kalender event: hanya owner yang boleh menulis', async () => {
+  assert.match((await push([{ c: 'purchases', id: 'bl-test1', patch: { date: '2026-11-16', item: 'Mawar', qty: 10, price: 5000, total: 50000 } }], kasir)).body.results[0].error, /izin/);
+  assert.ok((await push([{ c: 'purchases', id: 'bl-test1', patch: { date: '2026-11-16', item: 'Mawar', qty: 10, price: 5000, total: 50000 } }])).body.results[0].seq);
+  assert.ok((await push([{ c: 'events', id: 'ev-test', patch: { date: '2026-11-25', name: 'Hari Guru', kind: 'momen' } }])).body.results[0].seq);
+  assert.match((await push([{ c: 'events', id: 'ev-test', patch: { name: 'x' } }], kasir)).body.results[0].error, /izin/);
+});

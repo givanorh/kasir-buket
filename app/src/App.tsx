@@ -6,6 +6,9 @@ import { sync, useSyncStatus } from './lib/sync';
 import { startPrintStation, stopPrintStation } from './lib/print';
 import { Toasts } from './components/ui';
 import { Icon } from './components/icons';
+import { DueAlert, usePendingCancels } from './components/Alerts';
+import Kalender from './pages/Kalender';
+import Belanja from './pages/Belanja';
 import Setup from './pages/Setup';
 import Kasir from './pages/Kasir';
 import Pesanan from './pages/Pesanan';
@@ -26,8 +29,10 @@ const PAGES: { key: string; label: string; roles: Role[]; el: () => ReactElement
   { key: 'produksi', label: 'Produksi', roles: ['owner', 'kasir', 'perangkai'], el: () => <Produksi /> },
   { key: 'pelanggan', label: 'Pelanggan', roles: ['owner', 'kasir'], el: () => <Pelanggan /> },
   { key: 'produk', label: 'Produk', roles: ['owner'], el: () => <Produk /> },
+  { key: 'belanja', label: 'Belanja bahan', roles: ['owner'], el: () => <Belanja /> },
   { key: 'shift', label: 'Shift', roles: ['owner', 'kasir'], el: () => <ShiftPage /> },
   { key: 'laporan', label: 'Laporan', roles: ['owner'], el: () => <Laporan /> },
+  { key: 'kalender', label: 'Kalender', roles: ['owner'], el: () => <Kalender /> },
   { key: 'pengaturan', label: 'Pengaturan', roles: ['owner', 'kasir', 'perangkai'], el: () => <Pengaturan /> },
 ];
 
@@ -108,7 +113,8 @@ function Shell() {
   const hash = useHash();
   const role = s.user?.role || 'perangkai';
   const allowed = PAGES.filter((p) => p.roles.includes(role));
-  const page = allowed.find((p) => p.key === hash) || allowed[0];
+  const page = allowed.find((p) => p.key === hash.split('?')[0]) || allowed[0];
+  const pendingCancels = usePendingCancels().length;
   const store = useLiveQuery(() => db.settings.get('toko'));
 
   useEffect(() => {
@@ -124,7 +130,8 @@ function Shell() {
       <nav className="side">
         <div className="brand"><span className="brand-mark"><Icon name="flower" /></span><span>{store?.store_name || 'Kasir Buket'}</span></div>
         {allowed.map((p) => (
-          <a key={p.key} href={`#/${p.key}`} className={p === page ? 'on' : ''}><Icon name={p.key} /><span>{p.label}</span></a>
+          <a key={p.key} href={`#/${p.key}`} className={p === page ? 'on' : ''}><Icon name={p.key} /><span>{p.label}</span>
+            {p.key === 'pesanan' && role === 'owner' && pendingCancels > 0 && <em className="navbadge" title="Pengajuan pembatalan menunggu persetujuan">{pendingCancels}</em>}</a>
         ))}
       </nav>
       <div className={`main ${page.key === 'kasir' || page.key === 'produksi' ? 'wide' : ''}`}>
@@ -135,7 +142,7 @@ function Shell() {
             <UserMenu />
           </div>
         </header>
-        <div className="content">{page.el()}</div>
+        <div className="content">{page.key !== 'pengaturan' && <DueAlert />}{page.el()}</div>
       </div>
     </div>
   );

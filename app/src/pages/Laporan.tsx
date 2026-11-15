@@ -5,7 +5,8 @@ import { buildAnalysis, buildReport, scheduledQtyOn } from '../lib/calc';
 import { addDays, dayKey, endOfDay, fmtDate, num, rp, startOfDay } from '../lib/format';
 import { Field, Seg } from '../components/ui';
 import { storeCfg } from '../lib/settings';
-import type { Order } from '../lib/types';
+import type { HppMethod, Order, Settings } from '../lib/types';
+import { save } from '../lib/store';
 
 type Preset = 'hari' | 'kemarin' | '7' | 'bulan' | 'custom';
 
@@ -38,8 +39,10 @@ export default function Laporan() {
   const cashMoves = useLiveQuery(() => db.cash_moves.toArray(), []) || [];
   const outlets = useLiveQuery(() => db.outlets.toArray(), []) || [];
   const settings = useLiveQuery(() => db.settings.get('toko'));
+  const purchases = useLiveQuery(() => db.purchases.toArray(), []) || [];
+  const hppMethod: HppMethod = settings?.hpp_method || 'gabungan';
   const [from, to] = rangeOf(preset, a, b);
-  const r = useMemo(() => buildReport({ orders, payments, cashMoves, from, to, outletId: outlet || undefined }), [orders, payments, cashMoves, from.getTime(), to.getTime(), outlet]);
+  const r = useMemo(() => buildReport({ orders, payments, cashMoves, from, to, outletId: outlet || undefined, purchases, hppMethod }), [orders, payments, cashMoves, purchases, hppMethod, from.getTime(), to.getTime(), outlet]);
   const piutangAll = useMemo(() => {
     const paid = new Map<string, number>();
     for (const p of payments) if (!p.void) paid.set(p.order_id, (paid.get(p.order_id) || 0) + p.amount);
@@ -85,11 +88,14 @@ export default function Laporan() {
           <div className="row"><span>− Diskon</span><b>{rp(r.discount)}</b></div>
           <div className="row"><span>+ Ongkir/biaya tambahan</span><b>{rp(r.extraFee)}</b></div>
           <div className="row strong"><span>= Penjualan bersih</span><b>{rp(r.netSales)}</b></div>
-          <div className="row"><span>− HPP (Σ qty × modal)</span><b>{rp(r.cogs)}</b></div>
+          <div className="row" data-testid="hpp-method"><span className="muted small">Dasar HPP</span><Seg value={hppMethod} onChange={(v) => save<Settings>('settings', 'toko', { hpp_method: v })} options={[{ value: 'gabungan', label: 'Gabungan' }, { value: 'belanja', label: 'Belanja bahan' }, { value: 'produk', label: 'Modal produk' }]} /></div>
+          {hppMethod !== 'belanja' && <div className="row"><span>− HPP modal produk (Σ qty × modal)</span><b>{rp(r.cogsProduct)}</b></div>}
+          {hppMethod !== 'produk' && <div className="row"><span>− Belanja bahan ({r.purchaseCount} baris, <a href="#/belanja">lihat</a>)</span><b data-testid="hpp-belanja">{rp(r.purchases)}</b></div>}
+          {hppMethod === 'produk' && r.purchases > 0 && <div className="row muted small"><span>Belanja bahan periode ini {rp(r.purchases)} tidak dihitung (dasar HPP: modal produk)</span></div>}
           <div className="row strong"><span>= Laba kotor</span><b>{rp(r.grossProfit)}</b></div>
           <div className="row"><span>− Beban operasional</span><b>{rp(r.expenses)}</b></div>
           <div className="row strong"><span>= Laba bersih</span><b>{rp(r.netProfit)}</b></div>
-          {r.salesNoCost > 0 && r.netSales > 0 && (
+          {r.salesNoCost > 0 && r.netSales > 0 && hppMethod !== 'belanja' && r.purchases === 0 && (
             <div className="note warn small" data-testid="hpp-kosong">{rp(r.salesNoCost)} ({((r.salesNoCost / r.netSales) * 100).toLocaleString('id-ID', { maximumFractionDigits: 1 })}% penjualan) berasal dari item ber-HPP Rp 0, sehingga laba kotor tercatat lebih tinggi dari kenyataan. Isi HPP di menu Produk; transaksi baru memakai HPP terbaru.</div>
           )}
           <h3>Rekonsiliasi</h3>

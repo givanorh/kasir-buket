@@ -81,7 +81,13 @@ try {
   await A.getByRole('group', { name: 'Peran' }).getByRole('radio', { name: 'Perangkai' }).click();
   await A.getByRole('button', { name: 'Tambah pengguna', exact: true }).click();
   await A.getByText('@rangkai1').waitFor();
-  assert(true, 'akun perangkai dibuat');
+  await A.getByLabel('Nama', { exact: true }).fill('Tiara');
+  await A.getByLabel('Username').fill('tiara');
+  await A.getByLabel('Kata sandi (min. 6)').fill('tiara123');
+  await A.getByRole('group', { name: 'Peran' }).getByRole('radio', { name: 'Admin' }).click();
+  await A.getByRole('button', { name: 'Tambah pengguna', exact: true }).click();
+  await A.getByText('@tiara').waitFor();
+  assert(true, 'akun perangkai & Admin dibuat');
 
   // shift
   await A.goto(BASE + '/#/shift');
@@ -95,6 +101,14 @@ try {
   await card('Buket Mawar Merah').click();
   await card('Buket Mawar Merah').click();
   await card('Buket Snack Wisuda').click();
+  const snack = card('Buket Snack Wisuda');
+  await snack.getByTestId('pstep-plus').click();
+  assert((await snack.getByTestId('pstep').textContent()).includes('2'), 'tombol + di kartu produk: Snack menjadi 2');
+  await snack.getByTestId('pstep-minus').click();
+  await snack.getByTestId('pstep-minus').click();
+  assert((await snack.getByTestId('pstep').count()) === 0, 'tombol − di kartu: Snack 0 → hilang dari keranjang');
+  await card('Buket Snack Wisuda').click();
+  assert((await A.getByTestId('cart-tag').textContent()).includes('Rp 420.000'), 'keranjang 2 × 150.000 + 120.000 = Rp 420.000');
   await A.getByTestId('cart-open').click();
   await A.screenshot({ path: path.join(SHOTS, '1-kasir-tablet.png') });
   await A.getByTestId('btn-bayar').click();
@@ -105,6 +119,9 @@ try {
   await A.getByTestId('card').fill('Happy Graduation, Rina! Bangga sama kamu.');
   await A.getByTestId('notes').fill('Wrapping pink pastel, pita satin putih');
   await A.getByTestId('florists').getByRole('button', { name: 'Nazra' }).click();
+  assert(/tidak mendapat poin/.test(await A.getByTestId('non-member').textContent()), 'pelanggan baru bukan member: tidak dapat poin');
+  await A.getByTestId('daftar-member').check();
+  assert(/nomor member 081234567890/.test(await A.getByTestId('non-member').textContent()), 'daftar member: nomor member = nomor HP');
   await A.getByRole('radio', { name: 'DP' }).click();
   await A.getByRole('button', { name: 'QRIS' }).click();
   await A.screenshot({ path: path.join(SHOTS, '2-pembayaran-dp.png') });
@@ -151,6 +168,8 @@ try {
   await A.goto(BASE + '/#/pesanan');
   await A.locator('.trow', { hasText: no1 }).getByText('Dirangkai').waitFor({ timeout: 15000 });
   assert(true, 'status "Dirangkai" dari HP perangkai tampil di tablet kasir (realtime)');
+  const dueTxt = await A.getByTestId('due-alert').textContent();
+  assert(/H-1: \d+ pesanan untuk besok/.test(dueTxt) && dueTxt.includes(no1.split('-').pop()), `peringatan H-1: pesanan besok belum selesai dirangkai (${no1})`);
   const jobStatus = await A.evaluate(async () => {
     const req = indexedDB.open('kasir-buket');
     const db = await new Promise((r) => { req.onsuccess = () => r(req.result); });
@@ -239,8 +258,8 @@ try {
   assert(true, 'pop-up ulasan Google Maps (QR) & survei muncul sesuai frekuensi');
   await A.getByTestId('cust-name').fill('Rina');
   await A.getByLabel('Nomor HP/WA').fill('081234567890');
-  await A.locator('.loyal').getByText('42 poin').waitFor();
-  assert(true, 'poin pelanggan lama tampil di kasir (42 poin dari transaksi pertama)');
+  await A.getByTestId('member').getByText('42 poin').waitFor();
+  assert(true, 'member dikenali dari nomor HP: 42 poin dari transaksi pertama (⌊420.000 ÷ 10.000⌋)');
   await A.getByRole('radio', { name: 'Diantar' }).click();
   await A.getByTestId('maps-input').fill('3.80, 98.50');
   await A.getByTestId('btn-ongkir').click();
@@ -310,6 +329,37 @@ try {
   await A.getByTestId('sync-badge').filter({ hasText: 'Tersinkron' }).waitFor({ timeout: 10000 });
   await B.getByTestId('sync-badge').filter({ hasText: 'Tersinkron' }).waitFor({ timeout: 10000 });
   assert(true, 'kedua perangkat kembali berstatus "Tersinkron" (antrean 0)');
+
+  // ---------- kalender event & belanja bahan (owner) ----------
+  await A.goto(BASE + '/#/kalender');
+  await A.getByTestId('event-row').first().waitFor({ timeout: 15000 });
+  await A.getByRole('radio', { name: '2026' }).click();
+  const nev = await A.getByTestId('event-row').count();
+  const rowOf = (t) => A.locator('[data-testid=event-row] .ev-main > div > b').filter({ hasText: t }).count();
+  assert(nev >= 30 && await rowOf('Valentine') === 1 && await rowOf('Hari Guru Nasional') === 1, `kalender 2026 terisi otomatis: ${nev} event`);
+  await A.screenshot({ path: path.join(SHOTS, '14-kalender.png'), fullPage: true });
+  await A.goto(BASE + '/#/belanja');
+  await A.getByRole('radio', { name: 'Semua' }).click();
+  await A.getByTestId('unggah').click();
+  await A.getByTestId('berkas-belanja').setInputFiles(path.join(ROOT, 'app/test/fixtures/belanja.xlsx'));
+  await A.getByTestId('baris-siap').filter({ hasText: '4' }).waitFor();
+  await A.getByTestId('impor-belanja').click();
+  await A.getByTestId('total-belanja').filter({ hasText: 'Rp 438.000' }).waitFor();
+  assert(true, 'unggah Excel belanja: 4 baris, 200.000 + 70.000 + 18.000 + 150.000 = Rp 438.000');
+  await A.getByTestId('belanja-baru').click();
+  await A.getByTestId('bahan').fill('Plastik mika');
+  await A.getByLabel('Jumlah', { exact: true }).fill('2');
+  await A.getByLabel('Harga satuan').fill('6000');
+  await A.getByTestId('simpan-belanja').click();
+  await A.getByTestId('total-belanja').filter({ hasText: 'Rp 450.000' }).waitFor();
+  assert(true, 'belanja manual 2 × 6.000 = 12.000 → total Rp 450.000');
+  await A.screenshot({ path: path.join(SHOTS, '15-belanja.png'), fullPage: true });
+  await A.goto(BASE + '/#/laporan');
+  await A.getByRole('radio', { name: 'Pilih' }).click();
+  await A.locator('input[type=date]').first().fill('2026-11-14');
+  await A.locator('input[type=date]').nth(1).fill('2026-11-15');
+  await A.getByTestId('hpp-belanja').filter({ hasText: 'Rp 438.000' }).waitFor();
+  assert(true, 'laba rugi: belanja bahan 14–15 Nov Rp 438.000 masuk HPP (dasar gabungan)');
   // ---------- lupa kata sandi lewat email (SMTP palsu di localhost) ----------
   const net = await import('node:net');
   const mails = [];
@@ -365,6 +415,32 @@ try {
   assert(true, 'keluar akun lewat menu nama di kanan atas');
   assert(true, `lupa kata sandi: kode ${code} dikirim via email, sandi diganti, login dengan sandi baru berhasil`);
 
+  // ---------- pembatalan pesanan lunas lewat persetujuan owner ----------
+  const ctxD = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const D = await ctxD.newPage();
+  await D.goto(BASE);
+  await D.getByLabel('Username').fill('tiara');
+  await D.getByLabel('Kata sandi').fill('tiara123');
+  await D.getByRole('button', { name: 'Masuk' }).click();
+  await D.getByTestId('sync-badge').filter({ hasText: 'Tersinkron' }).waitFor({ timeout: 15000 });
+  await D.goto(BASE + '/#/pesanan');
+  await D.getByRole('radio', { name: '30 hari' }).click();
+  await D.locator('.trow', { hasText: no2 }).click();
+  assert((await D.getByTestId('btn-batal').count()) === 0, `Admin tidak bisa langsung membatalkan pesanan lunas ${no2}`);
+  await D.getByTestId('btn-ajukan-batal').click();
+  await D.getByTestId('alasan-batal').fill('Pelanggan salah pilih produk');
+  await D.getByTestId('kirim-batal').click();
+  await D.getByTestId('cancel-pending').waitFor();
+  assert(true, 'Admin mengajukan pembatalan beserta alasan');
+  await A.goto(BASE + '/#/pesanan');
+  await A.getByTestId('cancel-requests').getByText('Pelanggan salah pilih produk').waitFor({ timeout: 15000 });
+  await A.screenshot({ path: path.join(SHOTS, '16-persetujuan-batal.png') });
+  await A.getByTestId('cancel-requests').getByTestId('setujui-batal').click();
+  await D.getByTestId('cancel-pending').waitFor({ state: 'detached', timeout: 15000 });
+  await D.getByText(/Dibatalkan: Pelanggan salah pilih produk \(diajukan Tiara, disetujui Vano\)/).waitFor({ timeout: 15000 });
+  assert(true, 'owner menyetujui → pesanan batal, alasan & nama penyetuju tercatat, tampil di perangkat Admin');
+  await ctxD.close();
+
   // ---------- notifikasi perangkai + undangan Google Calendar ----------
   await A.goto(BASE + '/#/pengaturan');
   await A.getByRole('radio', { name: 'Perangkai', exact: true }).click();
@@ -379,11 +455,12 @@ try {
   assert(/BEGIN:VEVENT/.test(icsTxt) && /SUMMARY:Rangkai #KK001/.test(icsTxt) && !/Rp/.test(icsTxt), 'isi undangan: VEVENT "Rangkai #KK001", tanpa harga');
   await A.getByTestId('notif-row').filter({ hasText: 'Terkirim' }).first().waitFor({ timeout: 15000 });
   await A.screenshot({ path: path.join(SHOTS, '13-perangkai-notifikasi.png'), fullPage: true });
-  A.once('dialog', (d) => d.accept('Pelanggan membatalkan'));
   await A.goto(BASE + '/#/pesanan');
   await A.getByRole('radio', { name: '30 hari' }).click();
   await A.locator('.trow', { hasText: no1 }).click();
-  await A.getByRole('button', { name: 'Batalkan transaksi' }).click();
+  await A.getByTestId('btn-batal').click();
+  await A.getByRole('button', { name: 'Pelanggan membatalkan' }).click();
+  await A.getByTestId('kirim-batal').click();
   for (let i = 0; i < 40 && !mailTo('nazra@example.com', 'CANCEL'); i++) await A.waitForTimeout(250);
   assert(mailTo('nazra@example.com', 'CANCEL'), 'pesanan dibatalkan → undangan dibatalkan (METHOD:CANCEL), acara hilang dari kalender perangkai');
   await A.keyboard.press('Escape');

@@ -8,6 +8,8 @@ import { Empty, Seg } from '../components/ui';
 import { storeCfg } from '../lib/settings';
 import { Icon } from '../components/icons';
 import { OrderDetail } from './Pesanan';
+import { CancelRequests } from '../components/Alerts';
+import { useSession } from '../lib/session';
 import type { Order, ProductionStatus } from '../lib/types';
 
 const COLS: { st: ProductionStatus; label: string; next?: ProductionStatus; action?: string }[] = [
@@ -18,7 +20,8 @@ const COLS: { st: ProductionStatus; label: string; next?: ProductionStatus; acti
 
 /** Papan ruang perangkai: urut jadwal, terlambat ditandai merah, ketuk untuk memajukan status. */
 export default function Produksi() {
-  const [when, setWhen] = useState<'aktif' | 'hari' | 'besok'>('aktif');
+  const [when, setWhen] = useState<'aktif' | 'hari' | 'besok'>(() => (location.hash.includes('?besok') ? 'besok' : 'aktif'));
+  const isOwner = useSession().user?.role === 'owner';
   const [open, setOpen] = useState<string | null>(null);
   const [flor, setFlor] = useState('');
   const settings = useLiveQuery(() => db.settings.get('toko'));
@@ -50,6 +53,7 @@ export default function Produksi() {
 
   return (
     <div className="page">
+      {isOwner && <CancelRequests onOpen={setOpen} />}
       <div className="toolbar">
         <Seg value={when} onChange={setWhen} options={[{ value: 'aktif', label: 'Semua aktif' }, { value: 'hari', label: 'Hari ini' }, { value: 'besok', label: 'Besok' }]} />
         <div className="chips small" data-testid="florist-filter">
@@ -85,8 +89,11 @@ function Card({ o, next, action, onOpen }: { o: Order; next?: ProductionStatus; 
   const due = o.due_at ? new Date(o.due_at) : null;
   const late = due && due.getTime() < Date.now() && o.production_status !== 'siap';
   const soon = due && !late && due.getTime() - Date.now() < 2 * 3600e3;
+  const h1 = !!due && o.fulfillment !== 'sekarang' && dayKey(due) === dayKey(addDays(new Date(), 1)) && (o.production_status === 'antri' || o.production_status === 'dirangkai');
   return (
-    <div className={`bcard ${late ? 'late' : soon ? 'soon' : ''}`} data-testid="prod-card">
+    <div className={`bcard ${late ? 'late' : soon ? 'soon' : h1 ? 'h1' : ''}`} data-testid="prod-card">
+      {h1 && <div className="bc-flag">H-1: untuk besok, belum selesai</div>}
+      {o.cancel_request?.status === 'pending' && <div className="bc-flag red">Pengajuan batal menunggu owner</div>}
       <div className="bc-top" onClick={onOpen}>
         <b className="bc-no">#{o.no.split('-').pop()}</b>
         <span className="bc-due">{o.fulfillment === 'sekarang' ? 'DITUNGGU' : `${o.fulfillment === 'antar' ? 'Antar' : 'Ambil'} ${dayKey(o.due_at!) === dayKey(new Date()) ? 'Hari ini' : fmtDate(o.due_at)} ${fmtTime(o.due_at)}`}</span>

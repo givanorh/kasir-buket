@@ -28,7 +28,11 @@ export interface Settings extends Base {
   delivery?: Partial<DeliveryCfg>;
   loyalty?: Partial<LoyaltyCfg>;
   engagement?: Partial<EngageCfg>;
+  hpp_method?: HppMethod; // dasar HPP di laba rugi
 }
+
+/** produk = Σ qty × modal; belanja = Σ belanja bahan periode (metode periodik); gabungan = keduanya dijumlah. */
+export type HppMethod = 'produk' | 'belanja' | 'gabungan';
 
 export interface DeliveryCfg { rate: number; min: number; round: number }
 export interface LoyaltyCfg {
@@ -69,7 +73,8 @@ export interface Product extends Base {
   active?: boolean;
 }
 
-export interface Customer extends Base { name: string; phone?: string; address?: string; note?: string; birthday?: string; instagram?: string }
+/** Member = pelanggan terdaftar; nomor member = nomor HP ternormalisasi (08…). Hanya member yang mendapat & menukar poin. */
+export interface Customer extends Base { name: string; phone?: string; address?: string; note?: string; birthday?: string; instagram?: string; member?: boolean; member_since?: string }
 
 export interface OrderItem {
   product_id?: string;
@@ -130,7 +135,39 @@ export interface Order extends Base {
   points_discount?: number;
   review_discount?: number;
   survey?: Record<string, string>; // id pertanyaan -> jawaban (data v1.2: teks pertanyaan -> jawaban)
+  cancel_request?: CancelRequest | null; // pengajuan pembatalan pesanan lunas oleh Admin, diputus owner
 }
+
+export interface CancelRequest {
+  status: 'pending' | 'approved' | 'rejected';
+  reason: string;
+  by: string;
+  by_name: string;
+  at: string;
+  decided_by?: string;
+  decided_by_name?: string;
+  decided_at?: string;
+  decision_note?: string;
+}
+
+/** Belanja bahan baku (owner). total = qty × harga satuan (dibulatkan ke rupiah). */
+export interface Purchase extends Base {
+  date: string; // YYYY-MM-DD
+  item: string;
+  category?: string;
+  qty: number;
+  unit?: string;
+  price: number;
+  total: number;
+  supplier?: string;
+  note?: string;
+  outlet_id?: string;
+  source?: 'manual' | 'impor';
+}
+
+export type EventKind = 'libur' | 'momen' | 'musim' | 'lokal' | 'data' | 'toko';
+/** Event kalender owner: satu hari (date) atau rentang (date..end). */
+export interface CalEvent extends Base { date: string; end?: string; name: string; kind: EventKind; note?: string }
 
 export interface Payment extends Base {
   order_id: string;
@@ -191,9 +228,9 @@ export interface PrintJob extends Base {
 
 export type Collection =
   | 'outlets' | 'staff' | 'devices' | 'settings' | 'categories' | 'products' | 'customers'
-  | 'orders' | 'payments' | 'stock_moves' | 'shifts' | 'cash_moves' | 'print_jobs';
+  | 'orders' | 'payments' | 'stock_moves' | 'shifts' | 'cash_moves' | 'print_jobs' | 'purchases' | 'events';
 
 export const COLLECTIONS: Collection[] = [
   'outlets', 'staff', 'devices', 'settings', 'categories', 'products', 'customers',
-  'orders', 'payments', 'stock_moves', 'shifts', 'cash_moves', 'print_jobs',
+  'orders', 'payments', 'stock_moves', 'shifts', 'cash_moves', 'print_jobs', 'purchases', 'events',
 ];

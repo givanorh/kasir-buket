@@ -13,7 +13,7 @@ const stamp = (iso?: string | null) => {
 const neg = (n: number) => `(${num(n)})`;
 const kmText = (km?: number) => (km ? `${(Math.ceil(km * 10 - 1e-9) / 10).toLocaleString('id-ID', { maximumFractionDigits: 1 })} KM` : '');
 
-export interface StrukExtra { copyLabel?: string; pointsBalance?: number }
+export interface StrukExtra { copyLabel?: string; pointsBalance?: number; memberNo?: string }
 
 export function buildStruk(order: Order, payments: Payment[], st: Settings | undefined, opts: StrukExtra = {}): Line[] {
   const L: Line[] = [];
@@ -64,7 +64,8 @@ export function buildStruk(order: Order, payments: Payment[], st: Settings | und
 
   // pelanggan & pengambilan
   if (order.customer_name) L.push({ t: 'text', text: `PELANGGAN : ${order.customer_name.toUpperCase()}` });
-  if (order.points_earned || opts.pointsBalance !== undefined) {
+  if (opts.memberNo) L.push({ t: 'text', text: `MEMBER : ${opts.memberNo}` });
+  if (opts.memberNo && (order.points_earned || opts.pointsBalance !== undefined)) {
     const parts = [order.points_earned ? `+${order.points_earned} POIN` : '', opts.pointsBalance !== undefined ? `SALDO ${num(opts.pointsBalance)} POIN` : ''].filter(Boolean);
     L.push({ t: 'text', text: parts.join(' | ') });
   }

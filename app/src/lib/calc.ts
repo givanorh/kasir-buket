@@ -1,5 +1,5 @@
 // Perhitungan murni (tanpa I/O) supaya mudah diuji: total keranjang, laporan, shift.
-import type { CashMove, LoyaltyCfg, Order, OrderItem, Payment, Shift, SurveyQuestion } from './types';
+import type { CashMove, HppMethod, LoyaltyCfg, Order, OrderItem, Payment, Purchase, Shift, SurveyQuestion } from './types';
 import { answerOf } from './settings';
 
 export interface CartTotals {
@@ -36,6 +36,8 @@ export interface ReportInput {
   from: Date;
   to: Date;
   outletId?: string;
+  purchases?: Purchase[]; // belanja bahan (owner)
+  hppMethod?: HppMethod; // bawaan 'gabungan'
 }
 
 export interface Report {
@@ -45,7 +47,11 @@ export interface Report {
   discount: number; // potongan baris + transaksi
   extraFee: number;
   netSales: number; // penjualan bersih = gross − discount + extraFee
-  cogs: number; // HPP
+  cogs: number; // HPP sesuai metode
+  cogsProduct: number; // Σ qty × modal produk
+  purchases: number; // Σ belanja bahan pada periode (tanggal belanja)
+  purchaseCount: number;
+  hppMethod: HppMethod;
   grossProfit: number; // netSales − HPP
   expenses: number; // beban (kas keluar kategori biaya)
   netProfit: number; // grossProfit − expenses
@@ -74,7 +80,7 @@ export function buildReport(inp: ReportInput): Report {
   for (const p of inp.payments) if (!p.void) payByOrder.set(p.order_id, (payByOrder.get(p.order_id) || 0) + p.amount);
 
   const r: Report = {
-    count: orders.length, qty: 0, gross: 0, discount: 0, extraFee: 0, netSales: 0, cogs: 0, grossProfit: 0, expenses: 0, netProfit: 0,
+    count: orders.length, qty: 0, gross: 0, discount: 0, extraFee: 0, netSales: 0, cogs: 0, cogsProduct: 0, purchases: 0, purchaseCount: 0, hppMethod: inp.hppMethod || 'gabungan', grossProfit: 0, expenses: 0, netProfit: 0,
     paidForPeriodOrders: 0, outstandingForPeriodOrders: 0, cashIn: [], cashInTotal: 0, byProduct: [], byCashier: [], salesNoCost: 0, voided: all.length - orders.length,
   };
   const prod = new Map<string, Report['byProduct'][number]>();
@@ -85,7 +91,7 @@ export function buildReport(inp: ReportInput): Report {
     r.discount += o.item_discount + o.order_discount;
     r.extraFee += o.extra_fee;
     r.netSales += o.total;
-    r.cogs += o.cost_total;
+    r.cogsProduct += o.cost_total;
     const paid = Math.min(payByOrder.get(o.id) || 0, o.total);
     r.paidForPeriodOrders += paid;
     r.outstandingForPeriodOrders += o.total - paid;
@@ -105,6 +111,15 @@ export function buildReport(inp: ReportInput): Report {
     c.count++; c.sales += o.total;
     cash.set(cn, c);
   }
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  const dk = (d: Date) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+  const fa = dk(inp.from), fb = dk(inp.to);
+  for (const pu of inp.purchases || []) {
+    if (pu.deleted || pu.date < fa || pu.date > fb || (inp.outletId && pu.outlet_id && pu.outlet_id !== inp.outletId)) continue;
+    r.purchases += pu.total || 0;
+    r.purchaseCount++;
+  }
+  r.cogs = r.hppMethod === 'produk' ? r.cogsProduct : r.hppMethod === 'belanja' ? r.purchases : r.cogsProduct + r.purchases;
   r.grossProfit = r.netSales - r.cogs;
 
   for (const m of inp.cashMoves) {
