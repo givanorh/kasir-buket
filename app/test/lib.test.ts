@@ -44,9 +44,11 @@ test('escpos: byte perintah benar (init, ukuran ganda, potong)', () => {
 test('struk: total, DP, sisa tagihan; tiket: tanpa harga, ada kartu ucapan', () => {
   const pays: Payment[] = [{ id: 'p', order_id: 'o1', outlet_id: 'x', method: 'QRIS', amount: 155000, kind: 'dp', created_at: '2026-11-15T03:00:00Z' }];
   const s = layout(buildStruk(order(), pays, { id: 'toko', store_name: 'Buket Stabat', payment_methods: [], expense_categories: [] }), 58).map((r) => r.text).join('\n');
-  assert.match(s, /TOTAL/);
-  assert.match(s, /SISA TAGIHAN\s+Rp 155\.000/);
-  assert.match(s, /DP \(QRIS\)\s+155\.000/);
+  assert.match(s, /TOTAL BELANJA :\s+310\.000/);
+  assert.match(s, /SISA TAGIHAN :\s+155\.000/);
+  assert.match(s, /DP QRIS :\s+155\.000/);
+  assert.match(s, /BUKET MAWAR MERAH 20 TANGKAI/);
+  assert.match(s, /ONGKIR : +20\.000|ONGKIR\s/);
   for (const r of layout(buildStruk(order(), pays, undefined), 58)) assert.ok(r.text.length <= (r.size === 2 ? 16 : 32));
   const t = layout(buildTiket(order(), undefined), 80).map((r) => r.text).join('\n');
   assert.doesNotMatch(t, /150\.000|Rp/);

@@ -34,11 +34,16 @@ function printViaBrowser(doc: Line[], width: 58 | 80): Promise<void> {
     const lines = layout(doc, width);
     const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
     const body = lines.map((r) => `<div class="${r.bold ? 'b ' : ''}${r.size === 2 ? 's2 ' : ''}${r.align}">${esc(r.text) || '&nbsp;'}</div>`).join('');
+    // ukuran huruf dihitung agar tepat `cols` karakter per baris (lebar karakter Courier = 0,6 em)
+    const cols = width === 80 ? 48 : 32;
+    const paper = width - 6;
+    const fs = (paper / cols / 0.6).toFixed(3);
     const html = `<!doctype html><html><head><meta charset="utf-8"><style>
       @page { size: ${width}mm auto; margin: 0 }
-      body { margin: 0; padding: 2mm; width: ${width - 6}mm; font: 11px/1.25 'Courier New', monospace; color: #000 }
-      .b { font-weight: bold } .s2 { font-size: 20px; line-height: 1.2 } .center { text-align: center } .right { text-align: right }
-      div { white-space: pre-wrap; word-break: break-word }
+      body { margin: 0; padding: 2mm 3mm; width: ${paper}mm; font-family: 'Courier New', Courier, monospace; font-size: ${fs}mm; line-height: 1.22; color: #000 }
+      div { white-space: pre; overflow: hidden }
+      .b { font-weight: bold } .s2 { font-size: ${(Number(fs) * 2).toFixed(3)}mm; line-height: 1.1 }
+      .center { text-align: center } .right { text-align: right }
     </style></head><body>${body}</body></html>`;
     const f = document.createElement('iframe');
     f.style.cssText = 'position:fixed;width:0;height:0;border:0;right:0;bottom:0';
@@ -79,7 +84,13 @@ async function docFor(order: Order, kind: 'struk' | 'tiket', copyLabel?: string)
   const st = await db.settings.get('toko');
   if (kind === 'tiket') return buildTiket(order, st);
   const pays = await db.payments.where('order_id').equals(order.id).toArray();
-  return buildStruk(order, pays, st, { copyLabel });
+  let pointsBalance: number | undefined;
+  if (order.customer_id) {
+    const mine = (await db.orders.where('customer_id').equals(order.customer_id).toArray()).filter((o) => !o.void);
+    pointsBalance = mine.reduce((s, o) => s + (o.points_earned || 0) - (o.points_redeemed || 0), 0);
+    if (!mine.some((o) => o.points_earned || o.points_redeemed)) pointsBalance = undefined;
+  }
+  return buildStruk(order, pays, st, { copyLabel, pointsBalance });
 }
 
 export interface PrintResult { target: PrintTarget; ok: boolean; mode: string; error?: string }

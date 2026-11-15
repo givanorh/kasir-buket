@@ -12,9 +12,10 @@ import { fileURLToPath } from 'node:url';
 import { openDb, backup } from './db.js';
 import { hashPassword, verifyPassword, signToken, verifyToken, createLimiter } from './auth.js';
 import { sendMail } from './smtp.js';
+import { expandMapsUrl, roadDistanceKm } from './geo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const VERSION = '1.1.0';
+export const VERSION = '1.2.0';
 
 const ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
 const ROLES = ['owner', 'kasir', 'perangkai'];
@@ -47,6 +48,8 @@ export function createServer(opts = {}) {
   const limiter = createLimiter();
   const forgotLimiter = createLimiter(3, 15 * 60 * 1000);
   const sendMailFn = opts.sendMail || sendMail;
+  const fetchFn = opts.fetch || fetch;
+  const osrmBase = opts.osrmUrl || process.env.OSRM_URL || 'https://router.project-osrm.org';
   const sseClients = new Set();
 
   const q = {
@@ -450,6 +453,15 @@ export function createServer(opts = {}) {
         sseClients.add(res);
         req.on('close', () => sseClients.delete(res));
         return;
+      }
+      if (route === 'POST /api/geo/expand') {
+        const b = await readJson(req);
+        try { return send(res, 200, await expandMapsUrl(b.url, fetchFn)); } catch (e) { throw new HttpError(e.status || 502, e.status ? e.message : 'Google Maps tidak dapat dihubungi dari server'); }
+      }
+      if (route === 'POST /api/geo/route') {
+        const b = await readJson(req);
+        try { return send(res, 200, { km: await roadDistanceKm(b.from, b.to, { fetchFn, base: osrmBase }), source: 'osrm' }); }
+        catch (e) { throw new HttpError(e.status === 400 ? 400 : 502, e.status ? e.message : 'Layanan rute tidak dapat dihubungi'); }
       }
       if (parts[1] === 'email-config') return send(res, 200, await handleEmailConfig(user, req.method, parts, req.method === 'GET' ? {} : await readJson(req)));
       if (parts[1] === 'users') return send(res, 200, handleUsers(user, req.method, parts, req.method === 'GET' ? {} : await readJson(req)));

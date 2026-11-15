@@ -1,3 +1,4 @@
+import { Icon } from './icons';
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { num, parseRp } from '../lib/format';
 
@@ -12,7 +13,7 @@ export function Modal({ title, onClose, children, footer, wide }: { title: strin
       <div className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-label={title}>
         <div className="modal-head">
           <h2>{title}</h2>
-          <button className="icon-btn" onClick={onClose} aria-label="Tutup">✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label="Tutup"><Icon name="close" /></button>
         </div>
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-foot">{footer}</div>}

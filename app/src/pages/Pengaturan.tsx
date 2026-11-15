@@ -8,17 +8,21 @@ import { sendToPrinter, ThermalPrinter } from '../lib/print';
 import { buildTest } from '../lib/print/receipts';
 import { planImport, runImport, type ImportPlan } from '../lib/kasirpintar';
 import { Badge, Field, MoneyInput, Seg, toast } from '../components/ui';
+import { Icon } from '../components/icons';
+import { storeCfg } from '../lib/settings';
+import { parseLocalInput } from '../lib/geo';
+import { num, rp } from '../lib/format';
 import type { Outlet, PrintTarget, Role, Settings } from '../lib/types';
 import { fmtShort } from '../lib/format';
 
 export default function Pengaturan() {
   const s = useSession();
   const owner = s.user?.role === 'owner';
-  const [tab, setTab] = useState<'perangkat' | 'printer' | 'toko' | 'pengguna' | 'email' | 'impor'>('perangkat');
+  const [tab, setTab] = useState<'perangkat' | 'printer' | 'toko' | 'promo' | 'pengguna' | 'email' | 'impor'>('perangkat');
   const tabs = [
     { value: 'perangkat' as const, label: 'Perangkat' },
     { value: 'printer' as const, label: 'Printer' },
-    ...(owner ? [{ value: 'toko' as const, label: 'Toko' }, { value: 'pengguna' as const, label: 'Pengguna' }, { value: 'email' as const, label: 'Email' }, { value: 'impor' as const, label: 'Impor Kasir Pintar' }] : []),
+    ...(owner ? [{ value: 'toko' as const, label: 'Toko & cabang' }, { value: 'promo' as const, label: 'Promo, poin & ongkir' }, { value: 'pengguna' as const, label: 'Pengguna' }, { value: 'email' as const, label: 'Email' }, { value: 'impor' as const, label: 'Impor Kasir Pintar' }] : []),
   ];
   return (
     <div className="page">
@@ -27,6 +31,7 @@ export default function Pengaturan() {
       {tab === 'printer' && <PrinterTab />}
       {tab === 'toko' && owner && <StoreTab />}
       {tab === 'pengguna' && owner && <UsersTab />}
+      {tab === 'promo' && owner && <PromoTab />}
       {tab === 'email' && owner && <EmailTab />}
       {tab === 'impor' && owner && <ImportTab />}
     </div>
@@ -180,9 +185,7 @@ function StoreTab() {
       </section>
       <section className="card">
         <h3>Cabang</h3>
-        {outlets.map((o) => (
-          <div key={o.id} className="row"><input defaultValue={o.name} onBlur={(e) => e.target.value !== o.name && save<Outlet>('outlets', o.id, { name: e.target.value })} /><Badge>{o.code}</Badge></div>
-        ))}
+        {outlets.map((o) => <OutletRow key={o.id} o={o} />)}
         <button className="btn" onClick={async () => { const name = prompt('Nama cabang baru?'); if (name) await save<Outlet>('outlets', newId('out'), { name, code: String.fromCharCode(65 + outlets.length), active: true }); }}>＋ Cabang</button>
         <p className="muted small">Produk dipakai bersama semua cabang. Stok, transaksi, dan laporan dicatat per cabang sesuai pilihan di Pengaturan › Perangkat.</p>
       </section>
@@ -190,14 +193,120 @@ function StoreTab() {
   );
 }
 
-interface UserRow { id: string; username: string; name: string; email?: string | null; role: Role; active: number }
+function OutletRow({ o }: { o: Outlet }) {
+  const [input, setInput] = useState(o.maps_input || '');
+  const [busy, setBusy] = useState(false);
+  async function locate() {
+    setBusy(true);
+    try {
+      let p = parseLocalInput(input);
+      if (!p && /^https?:\/\//i.test(input.trim())) p = { ...(await api<{ lat: number; lng: number }>('/api/geo/expand', { body: { url: input.trim() }, timeout: 20000 })), source: 'link' };
+      if (!p) throw new Error('Tempel link Google Maps atau koordinat toko (Plus Code pendek butuh titik acuan, pakai link atau koordinat).');
+      await save<Outlet>('outlets', o.id, { location: { lat: p.lat, lng: p.lng }, maps_input: input.trim() });
+      toast(`Lokasi ${o.name} disimpan (${p.lat.toFixed(5)}, ${p.lng.toFixed(5)})`);
+    } catch (e) { toast((e as Error).message, 'err'); } finally { setBusy(false); }
+  }
+  return (
+    <div className="box stack">
+      <div className="row"><input defaultValue={o.name} onBlur={(e) => e.target.value !== o.name && save<Outlet>('outlets', o.id, { name: e.target.value })} aria-label="Nama cabang" /><Badge>{o.code}</Badge></div>
+      <Field label="Lokasi toko (titik awal hitung ongkir)" hint={o.location ? `Tersimpan: ${o.location.lat.toFixed(5)}, ${o.location.lng.toFixed(5)}` : 'Belum diatur'}>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Link Google Maps toko atau 3.7536, 98.4497" />
+          <button className="btn" disabled={busy || !input.trim()} onClick={locate}><Icon name="pin" size={18} />{busy ? 'Membaca…' : 'Simpan'}</button>
+        </div>
+      </Field>
+    </div>
+  );
+}
+
+/** Pengaturan khusus owner: poin loyalitas, pop-up ulasan & survei, tarif ongkir, daftar perangkai. */
+function PromoTab() {
+  const st = useLiveQuery(() => db.settings.get('toko'));
+  const [c, setC] = useState<ReturnType<typeof storeCfg> | null>(null);
+  useEffect(() => { if (st && !c) setC(storeCfg(st)); }, [st]); // eslint-disable-line
+  if (!c) return null;
+  const L = c.loyalty, E = c.engage, D = c.delivery;
+  const setL = (p: Partial<typeof L>) => setC({ ...c, loyalty: { ...L, ...p } });
+  const setE = (p: Partial<typeof E>) => setC({ ...c, engage: { ...E, ...p } });
+  const setD = (p: Partial<typeof D>) => setC({ ...c, delivery: { ...D, ...p } });
+  async function saveAll() {
+    await save<Settings>('settings', 'toko', { loyalty: c!.loyalty, engagement: c!.engage, delivery: c!.delivery, florists: c!.florists.map((x) => x.trim()).filter(Boolean) });
+    toast('Pengaturan promo, poin, dan ongkir disimpan');
+  }
+  const numIn = (v: number, on: (n: number) => void, label: string) => <input type="number" min={0} value={v} onChange={(e) => on(Number(e.target.value))} aria-label={label} />;
+  return (
+    <div className="stack">
+      <div className="two">
+        <section className="card">
+          <h3>Poin loyalitas</h3>
+          <label className="check"><input type="checkbox" checked={L.enabled} onChange={(e) => setL({ enabled: e.target.checked })} />Aktifkan poin</label>
+          <div className="cols">
+            <Field label="Setiap belanja (Rp)"><MoneyInput value={L.earn_per} onChange={(earn_per) => setL({ earn_per })} /></Field>
+            <Field label="Dapat poin">{numIn(L.earn_points, (earn_points) => setL({ earn_points }), 'Poin didapat')}</Field>
+          </div>
+          <div className="cols">
+            <Field label="Nilai 1 poin (Rp)"><MoneyInput value={L.point_value} onChange={(point_value) => setL({ point_value })} /></Field>
+            <Field label="Minimal tukar (poin)">{numIn(L.min_redeem, (min_redeem) => setL({ min_redeem }), 'Minimal tukar')}</Field>
+          </div>
+          <div className="cols">
+            <Field label="Silver: belanja 12 bulan ≥"><MoneyInput value={L.tier_silver} onChange={(tier_silver) => setL({ tier_silver })} /></Field>
+            <Field label="Gold: belanja 12 bulan ≥"><MoneyInput value={L.tier_gold} onChange={(tier_gold) => setL({ tier_gold })} /></Field>
+          </div>
+          <p className="calc">Contoh: belanja {rp(250000)} → ⌊250.000 ÷ {num(L.earn_per)}⌋ × {L.earn_points} = {Math.floor(250000 / Math.max(1, L.earn_per)) * L.earn_points} poin, bernilai {rp(Math.floor(250000 / Math.max(1, L.earn_per)) * L.earn_points * L.point_value)} ({((L.earn_points * L.point_value) / Math.max(1, L.earn_per) * 100).toLocaleString('id-ID', { maximumFractionDigits: 2 })}% kembali).</p>
+        </section>
+        <section className="card">
+          <h3>Pop-up ulasan Google Maps & survei</h3>
+          <label className="check"><input type="checkbox" checked={E.enabled} onChange={(e) => setE({ enabled: e.target.checked })} />Tampilkan di layar kasir</label>
+          <Field label="Muncul setiap … transaksi (per perangkat)">{numIn(E.every_n, (every_n) => setE({ every_n: Math.max(1, every_n) }), 'Frekuensi pop-up')}</Field>
+          <Field label="Link ulasan Google Maps toko" hint="Google Maps › profil toko › Bagikan › salin link, atau link “Minta ulasan” dari Google Business"><input value={E.review_url} onChange={(e) => setE({ review_url: e.target.value.trim() })} placeholder="https://g.page/r/…/review" /></Field>
+          <div className="cols">
+            <Field label="Diskon ulasan minimal"><MoneyInput value={E.review_discount_min} onChange={(review_discount_min) => setE({ review_discount_min })} /></Field>
+            <Field label="Diskon ulasan maksimal"><MoneyInput value={E.review_discount_max} onChange={(review_discount_max) => setE({ review_discount_max })} /></Field>
+          </div>
+          {E.survey.slice(0, 2).map((q, i) => (
+            <div key={i} className="box stack">
+              <Field label={`Pertanyaan survei ${i + 1}`}><input value={q.q} onChange={(e) => setE({ survey: E.survey.map((x, j) => (j === i ? { ...x, q: e.target.value } : x)) })} /></Field>
+              <Field label="Pilihan jawaban (pisahkan koma)"><input value={q.options.join(', ')} onChange={(e) => setE({ survey: E.survey.map((x, j) => (j === i ? { ...x, options: e.target.value.split(',').map((o) => o.trim()).filter(Boolean) } : x)) })} /></Field>
+            </div>
+          ))}
+          <p className="muted small">Jawaban survei tampil di Laporan › Analisis penjualan. Mengubah teks pertanyaan memulai hitungan baru untuk pertanyaan itu.</p>
+        </section>
+      </div>
+      <div className="two">
+        <section className="card">
+          <h3>Ongkir</h3>
+          <div className="cols">
+            <Field label="Tarif per km"><MoneyInput value={D.rate} onChange={(rate) => setD({ rate })} /></Field>
+            <Field label="Ongkir minimum"><MoneyInput value={D.min} onChange={(min) => setD({ min })} /></Field>
+          </div>
+          <Field label="Pembulatan ke atas (Rp)">{numIn(D.round, (round) => setD({ round: Math.max(1, round) }), 'Pembulatan')}</Field>
+          <p className="calc">Ongkir = maks({rp(D.min)}, km × {rp(D.rate)}, dibulatkan ke atas {rp(D.round)}). Jarak memakai rute jalan dari OpenStreetMap; bila tidak tersedia, garis lurus × 1,3.</p>
+        </section>
+        <section className="card">
+          <h3>Daftar perangkai</h3>
+          {c.florists.map((n, i) => (
+            <div key={i} className="row">
+              <input value={n} onChange={(e) => setC({ ...c, florists: c.florists.map((x, j) => (j === i ? e.target.value : x)) })} aria-label={`Perangkai ${i + 1}`} />
+              <button className="btn small danger" onClick={() => setC({ ...c, florists: c.florists.filter((_, j) => j !== i) })}>Hapus</button>
+            </div>
+          ))}
+          <button className="btn small" onClick={() => setC({ ...c, florists: [...c.florists, ''] })}><Icon name="plus" size={16} />Perangkai</button>
+        </section>
+      </div>
+      <button className="btn primary big" onClick={saveAll} data-testid="simpan-promo">Simpan pengaturan</button>
+    </div>
+  );
+}
+
+interface UserRow { id: string; username: string; name: string; email?: string | null; role: Role; active: number; outlet_id?: string | null }
 function UsersTab() {
   const [users, setUsers] = useState<UserRow[]>([]);
-  const [f, setF] = useState({ name: '', username: '', password: '', email: '', role: 'kasir' as Role });
+  const [f, setF] = useState({ name: '', username: '', password: '', email: '', role: 'kasir' as Role, outlet_id: 'outlet-utama' });
+  const outlets = useLiveQuery(() => db.outlets.toArray(), []) || [];
   const load = () => api<{ users: UserRow[] }>('/api/users').then((r) => setUsers(r.users)).catch((e) => toast(e.message, 'err'));
   useEffect(() => { load(); }, []);
   async function add() {
-    try { await api('/api/users', { body: f }); toast('Pengguna dibuat'); setF({ name: '', username: '', password: '', email: '', role: 'kasir' }); load(); } catch (e) { toast((e as Error).message, 'err'); }
+    try { await api('/api/users', { body: f }); toast('Pengguna dibuat'); setF({ name: '', username: '', password: '', email: '', role: 'kasir', outlet_id: f.outlet_id }); load(); } catch (e) { toast((e as Error).message, 'err'); }
   }
   async function patch(id: string, body: object) {
     try { await api(`/api/users/${id}`, { method: 'PATCH', body }); load(); toast('Disimpan'); } catch (e) { toast((e as Error).message, 'err'); }
@@ -210,12 +319,13 @@ function UsersTab() {
           <div key={u.id} className="row">
             <span><b>{u.name}</b> <span className="muted">@{u.username}{u.email ? ` · ${u.email}` : ' · tanpa email'}</span></span>
             <button className="btn small" onClick={() => { const em = prompt(`Email untuk ${u.name} (kosongkan untuk menghapus)`, u.email || ''); if (em !== null) patch(u.id, { email: em }); }}>Email</button>
-            <select value={u.role} onChange={(e) => patch(u.id, { role: e.target.value })}><option value="owner">owner</option><option value="kasir">kasir</option><option value="perangkai">perangkai</option></select>
+            <select value={u.role} onChange={(e) => patch(u.id, { role: e.target.value })} aria-label="Peran" style={{ maxWidth: 130 }}><option value="owner">Owner</option><option value="kasir">Admin</option><option value="perangkai">Perangkai</option></select>
+            <select value={u.outlet_id || 'outlet-utama'} onChange={(e) => patch(u.id, { outlet_id: e.target.value })} aria-label="Cabang" style={{ maxWidth: 160 }}>{outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select>
             <button className="btn small" onClick={() => { const pw = prompt(`Kata sandi baru untuk ${u.name} (min. 6)`); if (pw) patch(u.id, { password: pw }); }}>Sandi</button>
             <button className={`btn small ${u.active ? '' : 'primary'}`} onClick={() => patch(u.id, { active: !u.active })}>{u.active ? 'Nonaktifkan' : 'Aktifkan'}</button>
           </div>
         ))}
-        <p className="muted small">Peran: <b>owner</b> semua menu; <b>kasir</b> transaksi, pesanan, pelanggan, shift; <b>perangkai</b> hanya papan produksi.</p>
+        <p className="muted small">Peran: <b>Owner</b> semua menu termasuk laporan dan pengaturan promo; <b>Admin</b> kasir, pesanan, pelanggan, shift; <b>Perangkai</b> papan produksi. Cabang menentukan stok dan laporan saat pengguna masuk.</p>
       </section>
       <section className="card">
         <h3>Tambah pengguna</h3>
@@ -223,7 +333,8 @@ function UsersTab() {
         <Field label="Username"><input value={f.username} onChange={(e) => setF({ ...f, username: e.target.value.toLowerCase() })} autoCapitalize="none" /></Field>
         <Field label="Email (untuk reset kata sandi)"><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} autoCapitalize="none" /></Field>
         <Field label="Kata sandi (min. 6)"><input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></Field>
-        <Field group label="Peran"><Seg value={f.role} onChange={(role) => setF({ ...f, role })} options={[{ value: 'kasir', label: 'Kasir' }, { value: 'perangkai', label: 'Perangkai' }, { value: 'owner', label: 'Owner' }]} /></Field>
+        <Field group label="Peran"><Seg value={f.role} onChange={(role) => setF({ ...f, role })} options={[{ value: 'kasir', label: 'Admin' }, { value: 'perangkai', label: 'Perangkai' }, { value: 'owner', label: 'Owner' }]} /></Field>
+        <Field label="Cabang"><select value={f.outlet_id} onChange={(e) => setF({ ...f, outlet_id: e.target.value })}>{outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></Field>
         <button className="btn primary" disabled={!f.name || !f.username || f.password.length < 6} onClick={add}>Tambah</button>
       </section>
     </div>

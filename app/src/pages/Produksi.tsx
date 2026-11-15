@@ -5,6 +5,8 @@ import { addDays, dayKey, fmtDate, fmtTime } from '../lib/format';
 import { getDeviceConfig, setProductionStatus, type DeviceConfig } from '../lib/store';
 import { retryJob } from '../lib/print';
 import { Empty, Seg } from '../components/ui';
+import { storeCfg } from '../lib/settings';
+import { Icon } from '../components/icons';
 import { OrderDetail } from './Pesanan';
 import type { Order, ProductionStatus } from '../lib/types';
 
@@ -18,6 +20,9 @@ const COLS: { st: ProductionStatus; label: string; next?: ProductionStatus; acti
 export default function Produksi() {
   const [when, setWhen] = useState<'aktif' | 'hari' | 'besok'>('aktif');
   const [open, setOpen] = useState<string | null>(null);
+  const [flor, setFlor] = useState('');
+  const settings = useLiveQuery(() => db.settings.get('toko'));
+  const florists = storeCfg(settings).florists;
   const [cfg, setCfg] = useState<DeviceConfig | null>(null);
   const [, tick] = useState(0);
   useEffect(() => {
@@ -35,9 +40,10 @@ export default function Produksi() {
     const tomorrow = dayKey(addDays(new Date(), 1));
     return orders
       .filter((o) => !o.void && !o.deleted)
+      .filter((o) => !flor || (flor === '-' ? !o.florist : o.florist === flor))
       .filter((o) => when === 'aktif' || dayKey(o.due_at || o.created_at!) === (when === 'hari' ? today : tomorrow))
       .sort((a, b) => (a.due_at || a.created_at || '').localeCompare(b.due_at || b.created_at || ''));
-  }, [orders, when]);
+  }, [orders, when, flor]);
   const station = cfg?.stationTargets || [];
   const myJobs = jobs.filter((j) => station.includes(j.target));
   const sel = orders.find((o) => o.id === open);
@@ -46,9 +52,14 @@ export default function Produksi() {
     <div className="page">
       <div className="toolbar">
         <Seg value={when} onChange={setWhen} options={[{ value: 'aktif', label: 'Semua aktif' }, { value: 'hari', label: 'Hari ini' }, { value: 'besok', label: 'Besok' }]} />
+        <div className="chips small" data-testid="florist-filter">
+          <button className={!flor ? 'on' : ''} onClick={() => setFlor('')}>Semua perangkai</button>
+          {florists.map((n) => <button key={n} className={flor === n ? 'on' : ''} onClick={() => setFlor(n)}>{n}</button>)}
+          <button className={flor === '-' ? 'on' : ''} onClick={() => setFlor('-')}>Belum ditunjuk</button>
+        </div>
         {station.length > 0 && (
           <span className="station" data-testid="station">
-            🖨️ Stasiun cetak aktif ({station.join(', ')}) · antre {myJobs.filter((j) => j.status !== 'error').length}
+            <Icon name="print" size={16} />Stasiun cetak aktif ({station.join(', ')}) · antre {myJobs.filter((j) => j.status !== 'error').length}
             {myJobs.filter((j) => j.status === 'error').map((j) => <button key={j.id} className="btn small danger" onClick={() => retryJob(j)} title={j.error}>Ulangi gagal</button>)}
           </span>
         )}
@@ -78,13 +89,14 @@ function Card({ o, next, action, onOpen }: { o: Order; next?: ProductionStatus; 
     <div className={`bcard ${late ? 'late' : soon ? 'soon' : ''}`} data-testid="prod-card">
       <div className="bc-top" onClick={onOpen}>
         <b className="bc-no">#{o.no.split('-').pop()}</b>
-        <span className="bc-due">{o.fulfillment === 'sekarang' ? 'DITUNGGU' : `${o.fulfillment === 'antar' ? '🚚' : '🛍️'} ${dayKey(o.due_at!) === dayKey(new Date()) ? 'Hari ini' : fmtDate(o.due_at)} ${fmtTime(o.due_at)}`}</span>
+        <span className="bc-due">{o.fulfillment === 'sekarang' ? 'DITUNGGU' : `${o.fulfillment === 'antar' ? 'Antar' : 'Ambil'} ${dayKey(o.due_at!) === dayKey(new Date()) ? 'Hari ini' : fmtDate(o.due_at)} ${fmtTime(o.due_at)}`}</span>
       </div>
       <div onClick={onOpen}>
         {o.items.map((it, i) => <div key={i} className="bc-item"><b>{it.qty}×</b> {it.name}{it.note && <div className="muted">› {it.note}</div>}</div>)}
-        {o.notes && <div className="bc-note">📝 {o.notes}</div>}
-        {o.card_message && <div className="bc-note">💌 “{o.card_message}”</div>}
+        {o.notes && <div className="bc-note"><b>Catatan:</b> {o.notes}</div>}
+        {o.card_message && <div className="bc-note"><b>Kartu:</b> “{o.card_message}”</div>}
         <div className="muted">{o.customer_name || 'Umum'}</div>
+        {o.florist && <div className="bc-who">Perangkai: {o.florist}</div>}
       </div>
       {next && <button className="btn primary" onClick={() => setProductionStatus(o, next)}>{action}</button>}
     </div>

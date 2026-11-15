@@ -9,7 +9,7 @@ export interface Base {
   deleted?: boolean;
 }
 
-export interface Outlet extends Base { name: string; address?: string; phone?: string; code?: string; active?: boolean }
+export interface Outlet extends Base { name: string; address?: string; phone?: string; code?: string; active?: boolean; location?: { lat: number; lng: number } | null; maps_input?: string }
 export interface Staff extends Base { name: string; username: string; role: Role; active: boolean; outlet_id?: string | null }
 export interface Device extends Base { code: string; name?: string; user_id?: string; outlet_id?: string; last_seen?: string }
 
@@ -24,6 +24,30 @@ export interface Settings extends Base {
   expense_categories: ExpenseCategory[];
   daily_capacity?: number; // kapasitas buket per hari (0 = tidak dibatasi)
   dp_min_percent?: number;
+  florists?: string[]; // daftar perangkai yang bisa ditunjuk saat checkout
+  delivery?: Partial<DeliveryCfg>;
+  loyalty?: Partial<LoyaltyCfg>;
+  engagement?: Partial<EngageCfg>;
+}
+
+export interface DeliveryCfg { rate: number; min: number; round: number }
+export interface LoyaltyCfg {
+  enabled: boolean;
+  earn_per: number; // tiap Rp ini (setelah diskon, tanpa ongkir) = earn_points poin
+  earn_points: number;
+  point_value: number; // nilai tukar 1 poin (Rp)
+  min_redeem: number; // minimal poin sekali tukar
+  tier_silver: number; // belanja 12 bulan (Rp) untuk Silver
+  tier_gold: number;
+}
+export interface SurveyQuestion { q: string; options: string[] }
+export interface EngageCfg {
+  enabled: boolean;
+  every_n: number; // munculkan pop-up tiap N transaksi per perangkat
+  review_url: string; // link ulasan Google Maps
+  review_discount_min: number;
+  review_discount_max: number;
+  survey: SurveyQuestion[];
 }
 
 export interface Category extends Base { name: string; sort?: number }
@@ -43,7 +67,7 @@ export interface Product extends Base {
   active?: boolean;
 }
 
-export interface Customer extends Base { name: string; phone?: string; address?: string; note?: string }
+export interface Customer extends Base { name: string; phone?: string; address?: string; note?: string; birthday?: string; instagram?: string }
 
 export interface OrderItem {
   product_id?: string;
@@ -96,6 +120,14 @@ export interface Order extends Base {
   void_reason?: string;
   void_at?: string;
   source?: 'app' | 'kasirpintar';
+  florist?: string; // perangkai yang ditunjuk
+  delivery?: { input: string; lat: number; lng: number; km: number; km_source: 'osrm' | 'estimasi' | 'manual'; rate: number; min: number } | null;
+  manual_discount?: number;
+  points_earned?: number;
+  points_redeemed?: number;
+  points_discount?: number;
+  review_discount?: number;
+  survey?: Record<string, string>;
 }
 
 export interface Payment extends Base {

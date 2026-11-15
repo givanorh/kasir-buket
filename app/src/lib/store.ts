@@ -118,6 +118,14 @@ export interface CheckoutInput {
   payMethod: string;
   payAmount: number; // nominal yang dicatat sebagai pembayaran (≤ total)
   cashReceived: number; // uang diterima (tunai), untuk kembalian
+  florist?: string;
+  delivery?: Order['delivery'];
+  manualDiscount?: number;
+  pointsRedeemed?: number;
+  pointsDiscount?: number;
+  reviewDiscount?: number;
+  survey?: Record<string, string>;
+  pointsEarned?: number;
 }
 
 export async function checkout(inp: CheckoutInput): Promise<Order> {
@@ -164,6 +172,14 @@ export async function checkout(inp: CheckoutInput): Promise<Order> {
     production_status: 'antri',
     source: 'app',
     created_at: ts,
+    florist: inp.florist || '',
+    delivery: inp.fulfillment === 'antar' ? inp.delivery || null : null,
+    manual_discount: inp.manualDiscount || 0,
+    points_redeemed: customerId ? inp.pointsRedeemed || 0 : 0,
+    points_discount: customerId ? inp.pointsDiscount || 0 : 0,
+    review_discount: inp.reviewDiscount || 0,
+    survey: inp.survey && Object.keys(inp.survey).length ? inp.survey : undefined,
+    points_earned: customerId ? inp.pointsEarned || 0 : 0,
   };
   delete (order as any).qty;
   writes.push({ c: 'orders', id: orderId, patch: order as any });

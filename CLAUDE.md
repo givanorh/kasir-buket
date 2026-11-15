@@ -43,7 +43,9 @@ Selalu jalankan `server: npm test`, `app: npm test && npm run build`, dan `node 
 9. **Reset sandi via email**: kode 6 digit, hash SHA-256, berlaku 15 menit, maks. 5 percobaan, sekali pakai; respons generik untuk akun tak dikenal; kredensial SMTP hanya di tabel `kv` server, tidak pernah dikirim ke klien; email pengguna tidak ikut koleksi `staff`.
 10. **ID rekaman** cocok `/^[A-Za-z0-9_-]{4,64}$/`. Impor Kasir Pintar memakai ID deterministik (`kp-`, `kpo-`, `kpp-`) agar impor ulang idempoten.
 11. **Teks cetak ASCII saja** (`toAscii`), 58 mm = 32 kolom, 80 mm = 48 kolom. Tiket produksi tidak boleh memuat harga.
-12. Server tetap **tanpa dependensi npm**. Folder `data/` (basis data) wajib tetap di `.gitignore`.
+12. **Pengaturan bawaan** (perangkai, ongkir, poin, pop-up) ada di `app/src/lib/settings.ts` (`storeCfg`); pengaturan lama tanpa kolom baru tetap jalan. Poin disimpan per transaksi (`points_earned`, `points_redeemed`), saldo = Σ didapat − Σ ditukar, sehingga bebas konflik antarperangkat.
+13. **Lokasi**: `app/src/lib/geo.ts` (parse link Maps/Plus Code/koordinat, haversine, rumus ongkir) dan `server/src/geo.js` (`/api/geo/expand` hanya domain Google, `/api/geo/route` OSRM; fallback klien garis lurus × 1,3).
+14. Server tetap **tanpa dependensi npm**. Folder `data/` (basis data) wajib tetap di `.gitignore`.
 
 ## Batasan lingkungan
 - Android SDK/Gradle tidak tersedia di container (dl.google.com, maven.google.com diblokir). APK dibangun oleh GitHub Actions atau Android Studio di PC pengguna. Perubahan Java cukup dicek dengan `javac` terhadap stub API.

@@ -3,6 +3,8 @@ export type Align = 'left' | 'center' | 'right';
 export type Line =
   | { t: 'text'; text: string; align?: Align; bold?: boolean; size?: 1 | 2 }
   | { t: 'lr'; left: string; right: string; bold?: boolean; size?: 1 | 2 }
+  | { t: 'kv'; label: string; value: string; bold?: boolean } // gaya struk minimarket: "LABEL : nilai" rata kanan
+  | { t: 'item'; name: string; qty: number; price: string; total: string }
   | { t: 'hr'; char?: string }
   | { t: 'feed'; n?: number }
   | { t: 'cut' };
@@ -66,6 +68,30 @@ export function layout(doc: Line[], width: 58 | 80): RenderedLine[] {
     } else if (l.t === 'lr') {
       const size = l.size || 1;
       for (const s of leftRight(l.left, l.right, Math.floor(cols / size))) out.push({ text: s, align: 'left', bold: !!l.bold, size });
+    } else if (l.t === 'kv') {
+      const vw = cols === 48 ? 13 : 11;
+      const lw = cols - vw - 3;
+      const label = toAscii(l.label).slice(0, lw);
+      const value = toAscii(l.value);
+      if (value.length > vw) {
+        out.push({ text: label.padStart(lw) + ' :', align: 'left', bold: !!l.bold, size: 1 });
+        out.push({ text: value.padStart(cols), align: 'left', bold: !!l.bold, size: 1 });
+      } else out.push({ text: label.padStart(lw) + ' : ' + value.padStart(vw), align: 'left', bold: !!l.bold, size: 1 });
+    } else if (l.t === 'item') {
+      const name = toAscii(l.name).toUpperCase();
+      if (cols >= 48) {
+        // NAMA BARANG (22) | QTY (4) | HARGA (10) | JUMLAH (12)
+        const nameLines = wrap(name, 22);
+        const nums = String(l.qty).padStart(4) + toAscii(l.price).padStart(10) + toAscii(l.total).padStart(12);
+        nameLines.slice(0, -1).forEach((n) => out.push({ text: n, align: 'left', bold: false, size: 1 }));
+        out.push({ text: nameLines[nameLines.length - 1].padEnd(22) + nums, align: 'left', bold: false, size: 1 });
+      } else {
+        for (const n of wrap(name, cols)) out.push({ text: n, align: 'left', bold: false, size: 1 });
+        const left = `  ${l.qty} x ${toAscii(l.price)}`, right = toAscii(l.total);
+        const line = left.length + 1 + right.length <= cols ? left + ' '.repeat(cols - left.length - right.length) + right : null;
+        if (line) out.push({ text: line, align: 'left', bold: false, size: 1 });
+        else for (const t of leftRight(left, right, cols)) out.push({ text: t, align: 'left', bold: false, size: 1 });
+      }
     } else if (l.t === 'hr') {
       out.push({ text: (l.char || '-').repeat(cols), align: 'left', bold: false, size: 1 });
     } else if (l.t === 'feed') {

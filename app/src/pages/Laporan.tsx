@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../lib/db';
-import { buildReport, scheduledQtyOn } from '../lib/calc';
+import { buildAnalysis, buildReport, scheduledQtyOn } from '../lib/calc';
 import { addDays, dayKey, endOfDay, fmtDate, num, rp, startOfDay } from '../lib/format';
 import { Field, Seg } from '../components/ui';
+import { storeCfg } from '../lib/settings';
+import type { Order } from '../lib/types';
 
 type Preset = 'hari' | 'kemarin' | '7' | 'bulan' | 'custom';
 
@@ -30,6 +32,7 @@ export default function Laporan() {
   const [a, setA] = useState(dayKey(addDays(new Date(), -30)));
   const [b, setB] = useState(dayKey(new Date()));
   const [outlet, setOutlet] = useState('');
+  const [view, setView] = useState<'labarugi' | 'analisis'>('labarugi');
   const orders = useLiveQuery(() => db.orders.toArray(), []) || [];
   const payments = useLiveQuery(() => db.payments.toArray(), []) || [];
   const cashMoves = useLiveQuery(() => db.cash_moves.toArray(), []) || [];
@@ -62,6 +65,8 @@ export default function Laporan() {
         <button className="btn" onClick={exportCsv}>Ekspor CSV</button>
       </div>
       <p className="muted">{fmtDate(from.toISOString())} s.d. {fmtDate(to.toISOString())}{r.voided ? ` · ${r.voided} transaksi batal tidak dihitung` : ''}</p>
+      <Seg value={view} onChange={setView} options={[{ value: 'labarugi', label: 'Laba rugi' }, { value: 'analisis', label: 'Analisis penjualan' }]} />
+      {view === 'analisis' ? <Analisis orders={orders} from={from} to={to} outletId={outlet || undefined} /> : <>
 
       <div className="kpis" data-testid="kpis">
         <div className="kpi"><span>Transaksi</span><b>{num(r.count)}</b><i>{num(r.qty)} item</i></div>
@@ -120,6 +125,93 @@ export default function Laporan() {
         </div>
         {!cap && <Field label="" hint="Atur kapasitas harian di Pengaturan › Toko untuk peringatan hari ramai (Valentine, wisuda)."><span /></Field>}
       </section>
+      </>}
+    </div>
+  );
+}
+
+const HARI_PENDEK = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
+const BULAN_PENDEK = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+const juta = (n: number) => (n >= 1e6 ? `${(n / 1e6).toLocaleString('id-ID', { maximumFractionDigits: 1 })} jt` : n >= 1e3 ? `${Math.round(n / 1e3)} rb` : String(n));
+
+/** Batang satu seri (satu warna, tanpa legenda); nilai tampil saat disentuh/diarahkan. */
+function Bars({ data, label }: { data: { key: string; label: string; value: number; sub?: string }[]; label: string }) {
+  const max = Math.max(1, ...data.map((d) => d.value));
+  const [hover, setHover] = useState<number | null>(null);
+  const h = hover !== null ? data[hover] : null;
+  const every = Math.ceil(data.length / 12);
+  return (
+    <div>
+      <div className="row muted small" style={{ minHeight: 22 }}>{h ? <span><b style={{ color: 'var(--ink)' }}>{h.label}</b> · {rp(h.value)}{h.sub ? ` · ${h.sub}` : ''}</span> : <span>{label}</span>}</div>
+      <div className="bars" role="img" aria-label={label} onMouseLeave={() => setHover(null)}>
+        {data.map((d, i) => (
+          <div key={d.key} onMouseEnter={() => setHover(i)} onTouchStart={() => setHover(i)} title={`${d.label}: ${rp(d.value)}`}>
+            <i style={{ height: `${(d.value / max) * 100}%`, background: hover === i ? 'var(--peony)' : undefined }} />
+            <span>{i % every === 0 ? d.label : ''}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function HBars({ items }: { items: { label: string; n: number }[] }) {
+  const max = Math.max(1, ...items.map((i) => i.n));
+  const total = items.reduce((s, i) => s + i.n, 0);
+  if (!items.length) return <div className="muted">Belum ada jawaban pada periode ini.</div>;
+  return (
+    <div>
+      {items.map((i) => (
+        <div key={i.label} className="hbar"><span>{i.label}</span><div className="track"><i style={{ width: `${(i.n / max) * 100}%` }} /></div><span className="right">{i.n} · {Math.round((i.n / total) * 100)}%</span></div>
+      ))}
+    </div>
+  );
+}
+
+function Analisis({ orders, from, to, outletId }: { orders: Order[]; from: Date; to: Date; outletId?: string }) {
+  const settings = useLiveQuery(() => db.settings.get('toko'));
+  const qs = storeCfg(settings).engage.survey.map((s) => s.q);
+  const an = useMemo(() => buildAnalysis(orders, from, to, (iso) => dayKey(iso), qs, outletId), [orders, from.getTime(), to.getTime(), qs.join('|'), outletId]);
+  const days = an.daily.length;
+  const series = days > 62
+    ? Object.values(an.daily.reduce<Record<string, { key: string; label: string; value: number; n: number }>>((acc, d) => {
+        const k = d.day.slice(0, 7);
+        const m = acc[k] || (acc[k] = { key: k, label: `${BULAN_PENDEK[Number(k.slice(5)) - 1]} ${k.slice(2, 4)}`, value: 0, n: 0 });
+        m.value += d.sales; m.n += d.count;
+        return acc;
+      }, {})).map((m) => ({ key: m.key, label: m.label, value: m.value, sub: `${m.n} transaksi` }))
+    : an.daily.map((d) => ({ key: d.day, label: `${Number(d.day.slice(8))}/${Number(d.day.slice(5, 7))}`, value: d.sales, sub: `${d.count} transaksi` }));
+  return (
+    <div className="page" data-testid="analisis">
+      <div className="kpis">
+        <div className="kpi"><span>Rata-rata per transaksi</span><b>{rp(an.avgBasket)}</b><i>{an.daily.reduce((s, d) => s + d.count, 0)} transaksi</i></div>
+        <div className="kpi"><span>Pelanggan kembali</span><b>{an.repeatRate.toFixed(0)}%</b><i>dari {an.customersKnown} pelanggan bernama</i></div>
+        <div className="kpi"><span>Pengantaran</span><b>{an.delivery.count}</b><i>ongkir {rp(an.delivery.fees)} · rata-rata {an.delivery.avgKm.toLocaleString('id-ID')} km</i></div>
+        <div className="kpi"><span>Promo ulasan & poin</span><b>{an.review.count}</b><i>diskon ulasan {rp(an.review.discount)} · poin {rp(an.pointsDiscount)}</i></div>
+      </div>
+      <section className="card">
+        <h3>Penjualan {days > 62 ? 'per bulan' : 'per hari'}</h3>
+        <Bars data={series} label={`Arahkan atau sentuh batang untuk melihat nilai. Tertinggi ${juta(Math.max(0, ...series.map((x) => x.value)))}`} />
+      </section>
+      <div className="two">
+        <section className="card">
+          <h3>Per hari dalam seminggu</h3>
+          <Bars data={an.weekday.map((w) => ({ key: String(w.day), label: HARI_PENDEK[w.day], value: w.sales, sub: `${w.count} transaksi` }))} label="Hari ramai untuk mengatur jadwal perangkai" />
+        </section>
+        <section className="card">
+          <h3>Beban kerja perangkai</h3>
+          {an.florists.map((f) => <div key={f.name} className="row"><span>{f.name}</span><span>{f.orders} pesanan · {f.items} item</span></div>)}
+          {!an.florists.length && <div className="muted">Belum ada pesanan dengan perangkai yang ditunjuk.</div>}
+        </section>
+      </div>
+      <div className="two">
+        {an.survey.map((s) => (
+          <section key={s.q} className="card">
+            <h3>{s.q}</h3>
+            <HBars items={s.answers} />
+          </section>
+        ))}
+      </div>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 // Perhitungan murni (tanpa I/O) supaya mudah diuji: total keranjang, laporan, shift.
-import type { CashMove, Order, OrderItem, Payment, Shift } from './types';
+import type { CashMove, LoyaltyCfg, Order, OrderItem, Payment, Shift } from './types';
 
 export interface CartTotals {
   subtotal: number; item_discount: number; order_discount: number; extra_fee: number; total: number; cost_total: number; qty: number;
@@ -158,4 +158,97 @@ export function scheduledQtyOn(orders: Order[], dayKeyStr: string, dayKeyFn: (is
     for (const it of o.items) if ((it.type || 'buket') === 'buket') n += it.qty;
   }
   return n;
+}
+
+// ---------------- loyalty ----------------
+
+/** Poin didapat = ⌊(total − ongkir) / earn_per⌋ × earn_points. */
+export function pointsEarned(total: number, extraFee: number, cfg: LoyaltyCfg): number {
+  if (!cfg.enabled || cfg.earn_per <= 0) return 0;
+  return Math.floor(Math.max(0, total - extraFee) / cfg.earn_per) * cfg.earn_points;
+}
+
+export interface CustomerStats {
+  count: number; spend: number; avg: number; spend12m: number; first: string; last: string; due: number;
+  earned: number; redeemed: number; balance: number; tier: 'Bronze' | 'Silver' | 'Gold';
+  favorites: { name: string; qty: number }[]; occasions: { label: string; n: number }[];
+}
+
+export function customerStats(customerId: string, orders: Order[], paid: Map<string, number>, cfg: LoyaltyCfg, now = new Date()): CustomerStats {
+  const yearAgo = new Date(now); yearAgo.setFullYear(now.getFullYear() - 1);
+  const s: CustomerStats = { count: 0, spend: 0, avg: 0, spend12m: 0, first: '', last: '', due: 0, earned: 0, redeemed: 0, balance: 0, tier: 'Bronze', favorites: [], occasions: [] };
+  const fav = new Map<string, number>(), occ = new Map<string, number>();
+  for (const o of orders) {
+    if (o.void || o.customer_id !== customerId) continue;
+    s.count++; s.spend += o.total;
+    if ((o.created_at || '') >= yearAgo.toISOString()) s.spend12m += o.total;
+    if (!s.first || (o.created_at || '') < s.first) s.first = o.created_at || '';
+    if ((o.created_at || '') > s.last) s.last = o.created_at || '';
+    s.due += Math.max(0, o.total - (paid.get(o.id) || 0));
+    s.earned += o.points_earned || 0;
+    s.redeemed += o.points_redeemed || 0;
+    for (const it of o.items) fav.set(it.name, (fav.get(it.name) || 0) + it.qty);
+    const oc = o.survey && Object.values(o.survey)[1];
+    if (oc) occ.set(oc, (occ.get(oc) || 0) + 1);
+  }
+  s.avg = s.count ? Math.round(s.spend / s.count) : 0;
+  s.balance = s.earned - s.redeemed;
+  s.tier = s.spend12m >= cfg.tier_gold ? 'Gold' : s.spend12m >= cfg.tier_silver ? 'Silver' : 'Bronze';
+  s.favorites = [...fav.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, qty]) => ({ name, qty }));
+  s.occasions = [...occ.entries()].sort((a, b) => b[1] - a[1]).map(([label, n]) => ({ label, n }));
+  return s;
+}
+
+// ---------------- analisis penjualan (owner) ----------------
+export interface Analysis {
+  daily: { day: string; sales: number; count: number }[];
+  weekday: { day: number; sales: number; count: number }[];
+  repeatRate: number; // % pelanggan dengan ≥ 2 transaksi
+  customersKnown: number;
+  avgBasket: number;
+  delivery: { count: number; fees: number; avgKm: number };
+  review: { count: number; discount: number };
+  survey: { q: string; answers: { label: string; n: number }[] }[];
+  florists: { name: string; orders: number; items: number }[];
+  pointsRedeemed: number;
+  pointsDiscount: number;
+}
+
+export function buildAnalysis(orders: Order[], from: Date, to: Date, dayKeyFn: (iso: string) => string, questions: string[], outletId?: string): Analysis {
+  const a = from.getTime(), b = to.getTime();
+  const xs = orders.filter((o) => !o.void && (!outletId || o.outlet_id === outletId) && inRange(o.created_at, a, b));
+  const daily = new Map<string, { day: string; sales: number; count: number }>();
+  for (let d = new Date(from); d.getTime() <= b; d.setDate(d.getDate() + 1)) daily.set(dayKeyFn(d.toISOString()), { day: dayKeyFn(d.toISOString()), sales: 0, count: 0 });
+  const weekday = Array.from({ length: 7 }, (_, day) => ({ day, sales: 0, count: 0 }));
+  const perCust = new Map<string, number>();
+  const surveys = questions.map((q) => ({ q, m: new Map<string, number>() }));
+  const flor = new Map<string, { name: string; orders: number; items: number }>();
+  const r: Analysis = { daily: [], weekday, repeatRate: 0, customersKnown: 0, avgBasket: 0, delivery: { count: 0, fees: 0, avgKm: 0 }, review: { count: 0, discount: 0 }, survey: [], florists: [], pointsRedeemed: 0, pointsDiscount: 0 };
+  let kmSum = 0, total = 0;
+  for (const o of xs) {
+    const k = dayKeyFn(o.created_at!);
+    const d = daily.get(k) || { day: k, sales: 0, count: 0 };
+    d.sales += o.total; d.count++; daily.set(k, d);
+    const w = weekday[new Date(o.created_at!).getDay()]; w.sales += o.total; w.count++;
+    total += o.total;
+    if (o.customer_id) perCust.set(o.customer_id, (perCust.get(o.customer_id) || 0) + 1);
+    if (o.fulfillment === 'antar') { r.delivery.count++; r.delivery.fees += o.extra_fee; kmSum += o.delivery?.km || 0; }
+    if (o.review_discount) { r.review.count++; r.review.discount += o.review_discount; }
+    r.pointsRedeemed += o.points_redeemed || 0;
+    r.pointsDiscount += o.points_discount || 0;
+    if (o.survey) surveys.forEach((s) => { const ans = o.survey![s.q]; if (ans) s.m.set(ans, (s.m.get(ans) || 0) + 1); });
+    if (o.florist) {
+      const f = flor.get(o.florist) || { name: o.florist, orders: 0, items: 0 };
+      f.orders++; f.items += o.items.reduce((s, i) => s + i.qty, 0);
+      flor.set(o.florist, f);
+    }
+  }
+  r.daily = [...daily.values()].sort((x, y) => x.day.localeCompare(y.day));
+  r.customersKnown = perCust.size;
+  r.repeatRate = perCust.size ? ([...perCust.values()].filter((n) => n >= 2).length / perCust.size) * 100 : 0;
+  r.avgBasket = xs.length ? Math.round(total / xs.length) : 0;
+  r.delivery.avgKm = r.delivery.count ? Math.round((kmSum / r.delivery.count) * 10) / 10 : 0;
+  r.survey = surveys.map((s) => ({ q: s.q, answers: [...s.m.entries()].sort((x, y) => y[1] - x[1]).map(([label, n]) => ({ label, n })) }));
+  r.florists = [...flor.values()].sort((x, y) => y.orders - x.orders);
+  return r;
 }

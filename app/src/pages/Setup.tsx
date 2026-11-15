@@ -1,6 +1,15 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { api, getSession, isNative, login, updateSession } from '../lib/session';
 import { Field, toast } from '../components/ui';
+import { Icon } from '../components/icons';
+import { getDeviceConfig, setDeviceConfig } from '../lib/store';
+
+/** Perangkat ikut cabang pengguna yang masuk (stok, transaksi, laporan dicatat ke cabang itu). */
+async function followOutlet(outletId?: string) {
+  if (!outletId) return;
+  const cfg = await getDeviceConfig();
+  if (cfg.outletId !== outletId) await setDeviceConfig({ ...cfg, outletId });
+}
 
 const confirmDiscard = (n: number) =>
   window.confirm(`Server ini berbeda dari server sebelumnya. ${n} perubahan di perangkat ini belum terkirim ke server lama dan akan dihapus. Lanjutkan?`);
@@ -42,10 +51,11 @@ export default function Setup() {
 
   const doSetup = run(async () => {
     await api('/api/setup', { body: f });
-    await login(f.username, f.password, f.deviceName, confirmDiscard);
+    const r = await login(f.username, f.password, f.deviceName, confirmDiscard);
+    await followOutlet(r.user.outlet_id);
     toast('Toko siap digunakan');
   });
-  const doLogin = run(async () => { await login(f.username, f.password, f.deviceName, confirmDiscard); });
+  const doLogin = run(async () => { const r = await login(f.username, f.password, f.deviceName, confirmDiscard); await followOutlet(r.user.outlet_id); });
   const doForgot = run(async () => {
     const r = await api<{ message: string; to?: string }>('/api/auth/forgot', { body: { username: f.username } });
     toast(r.to ? `Kode dikirim ke ${r.to}` : r.message, 'info');
@@ -62,7 +72,7 @@ export default function Setup() {
   return (
     <div className="auth">
       <div className="auth-card">
-        <div className="auth-logo">💐</div>
+        <div className="auth-logo"><Icon name="flower" size={26} /></div>
         <h1>Kasir Buket</h1>
         {(isNative() || !health) && (
           <form onSubmit={(e) => { e.preventDefault(); check(); }} className="stack">

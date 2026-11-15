@@ -1,29 +1,39 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '../lib/db';
-import { cartTotals, scheduledQtyOn } from '../lib/calc';
+import qrcode from 'qrcode-generator';
+import { db, getMeta, setMeta } from '../lib/db';
+import { cartTotals, pointsEarned, scheduledQtyOn } from '../lib/calc';
 import { addDays, dayKey, fmtDate, fromLocalInput, num, rp, toLocalInput } from '../lib/format';
-import { activeShift, checkout, stockLevels, type CheckoutInput } from '../lib/store';
-import { printOrder, previewText, type PrintResult } from '../lib/print';
+import { activeShift, checkout, getDeviceConfig, stockLevels, type CheckoutInput, type DeviceConfig } from '../lib/store';
+import { printOrder, type PrintResult } from '../lib/print';
 import { buildStruk, buildTiket } from '../lib/print/receipts';
+import { storeCfg } from '../lib/settings';
+import { api } from '../lib/session';
+import { deliveryFee, haversineKm, isShortMapsLink, parseLocalInput, ROAD_FACTOR, type LatLng } from '../lib/geo';
 import { Field, Modal, MoneyInput, Seg, toast } from '../components/ui';
+import { Icon } from '../components/icons';
+import { ReceiptPreview } from '../components/ReceiptPreview';
 import type { Fulfillment, Order, OrderItem, Product } from '../lib/types';
 
-const COLORS = ['#f6d6de', '#fde2c8', '#d9ecd9', '#dbe4f7', '#efdcf5', '#f9e9b8'];
+const TINTS = ['#f3dfe6', '#e3ece5', '#efe6dc', '#e2e6f1', '#ece3f0', '#f2ecd8'];
+
+export interface EngageResult { reviewDiscount: number; survey: Record<string, string> }
 
 export default function Kasir() {
   const products = useLiveQuery(() => db.products.toArray(), []) || [];
   const categories = useLiveQuery(() => db.categories.toArray(), []) || [];
   const stock = useLiveQuery(() => stockLevels(), []) || new Map<string, number>();
   const shift = useLiveQuery(() => activeShift(), []);
+  const settings = useLiveQuery(() => db.settings.get('toko'));
   const [q, setQ] = useState('');
   const [cat, setCat] = useState('');
   const [cart, setCart] = useState<OrderItem[]>([]);
+  const [panel, setPanel] = useState(false);
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [custom, setCustom] = useState(false);
-  const [pay, setPay] = useState(false);
+  const [engage, setEngage] = useState(false);
+  const [pay, setPay] = useState<EngageResult | null>(null);
   const [done, setDone] = useState<{ order: Order; results: PrintResult[] } | null>(null);
-  const [tab, setTab] = useState<'produk' | 'keranjang'>('produk');
 
   const list = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -33,6 +43,11 @@ export default function Kasir() {
       .filter((p) => !s || p.name.toLowerCase().includes(s) || (p.sku || '').toLowerCase().includes(s))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [products, q, cat]);
+  const inCart = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const it of cart) if (it.product_id) m.set(it.product_id, (m.get(it.product_id) || 0) + it.qty);
+    return m;
+  }, [cart]);
   const totals = cartTotals(cart);
 
   function add(p: Product) {
@@ -44,66 +59,84 @@ export default function Kasir() {
   }
   const setQty = (i: number, d: number) => setCart((c) => c.flatMap((x, j) => (j !== i ? [x] : x.qty + d <= 0 ? [] : [{ ...x, qty: x.qty + d }])));
 
+  async function startPay() {
+    setPanel(false);
+    const cfg = storeCfg(settings).engage;
+    if (cfg.enabled && cfg.every_n > 0) {
+      const n = (await getMeta<number>('engage_count', 0)) + 1;
+      await setMeta('engage_count', n);
+      if (n % cfg.every_n === 0) { setEngage(true); return; }
+    }
+    setPay({ reviewDiscount: 0, survey: {} });
+  }
+
   return (
     <div className="pos">
-      <div className="pos-tabs">
-        <Seg value={tab} onChange={setTab} options={[{ value: 'produk', label: 'Produk' }, { value: 'keranjang', label: `Keranjang (${totals.qty})` }]} />
+      {!shift && <div className="note warn">Shift belum dibuka. Transaksi tetap bisa, tetapi rekap kas laci lebih akurat bila shift dibuka di menu <a href="#/shift">Shift</a>.</div>}
+      <div className="pos-search">
+        <div className="search"><Icon name="search" /><input placeholder="Cari buket atau kode" value={q} onChange={(e) => setQ(e.target.value)} /></div>
+        <button className="btn" onClick={() => setCustom(true)}><Icon name="plus" size={18} />Item custom</button>
       </div>
-      <section className={`pos-left ${tab === 'produk' ? 'show' : ''}`}>
-        {!shift && <div className="note warn">Shift belum dibuka. Transaksi tetap bisa, tetapi rekap kas laci lebih akurat bila shift dibuka di menu <a href="#/shift">Shift</a>.</div>}
-        <div className="pos-search">
-          <input placeholder="Cari buket / kode…" value={q} onChange={(e) => setQ(e.target.value)} />
-          <button className="btn" onClick={() => setCustom(true)}>＋ Item custom</button>
-        </div>
-        <div className="chips">
-          <button className={!cat ? 'on' : ''} onClick={() => setCat('')}>Semua</button>
-          {categories.filter((c) => !c.deleted).sort((a, b) => (a.sort || 0) - (b.sort || 0)).map((c) => (
-            <button key={c.id} className={cat === c.id ? 'on' : ''} onClick={() => setCat(c.id)}>{c.name}</button>
-          ))}
-        </div>
-        <div className="grid">
-          {list.map((p, i) => {
-            const st = p.track_stock ? stock.get(p.id) || 0 : null;
-            return (
-              <button key={p.id} className="pcard" onClick={() => add(p)} disabled={st !== null && st <= 0} data-testid="product-card">
-                <div className="pimg" style={{ background: p.photo ? `center/cover url(${p.photo})` : COLORS[i % COLORS.length] }}>{!p.photo && p.name.slice(0, 1)}</div>
-                <div className="pname">{p.name}</div>
-                <div className="pprice">{rp(p.price)}</div>
-                {st !== null && <div className={`pstock ${st <= (p.min_stock || 0) ? 'low' : ''}`}>Stok {st}</div>}
-              </button>
-            );
-          })}
-          {!list.length && <div className="empty">Belum ada produk. Tambahkan di menu Produk, atau pakai “Item custom”.</div>}
-        </div>
-      </section>
+      <div className="chips scroll">
+        <button className={!cat ? 'on' : ''} onClick={() => setCat('')}>Semua</button>
+        {categories.filter((c) => !c.deleted).sort((a, b) => (a.sort || 0) - (b.sort || 0)).map((c) => (
+          <button key={c.id} className={cat === c.id ? 'on' : ''} onClick={() => setCat(c.id)}>{c.name}</button>
+        ))}
+      </div>
+      <div className="grid">
+        {list.map((p, i) => {
+          const st = p.track_stock ? stock.get(p.id) || 0 : null;
+          const n = inCart.get(p.id) || 0;
+          return (
+            <button key={p.id} className={`pcard ${n ? 'in' : ''}`} onClick={() => add(p)} disabled={st !== null && st <= 0} data-testid="product-card">
+              <div className="pimg" style={{ background: p.photo ? `center/cover url(${p.photo})` : TINTS[i % TINTS.length] }}>{!p.photo && p.name.slice(0, 1)}</div>
+              <div className="pinfo">
+                <span className="pname">{p.name}</span>
+                <span className="pprice">{rp(p.price)}</span>
+                {st !== null && <span className={`pstock ${st <= (p.min_stock || 0) ? 'low' : ''}`}>Stok {st}</span>}
+              </div>
+              {n > 0 && <span className="pqty">{n}</span>}
+            </button>
+          );
+        })}
+        {!list.length && <div className="empty">Belum ada produk. Tambahkan di menu Produk, atau pakai Item custom.</div>}
+      </div>
 
-      <section className={`pos-right ${tab === 'keranjang' ? 'show' : ''}`}>
-        <div className="cart">
-          {cart.map((it, i) => (
-            <div key={i} className="citem">
-              <div className="cmain" onClick={() => setEditIdx(i)}>
-                <div className="cname">{it.name}</div>
-                <div className="csub">{num(it.price)}{it.discount ? ` · pot. ${num(it.discount)}` : ''}{it.note ? ` · ${it.note}` : ''}</div>
-              </div>
-              <div className="qty">
-                <button onClick={() => setQty(i, -1)} aria-label="Kurangi">−</button>
-                <span>{it.qty}</span>
-                <button onClick={() => setQty(i, 1)} aria-label="Tambah">＋</button>
-              </div>
-              <div className="cline">{num(it.qty * it.price - it.discount)}</div>
+      <div className="tag-wrap">
+        {panel && cart.length > 0 && (
+          <div className="cart-panel" role="dialog" aria-label="Keranjang">
+            <div className="cart-panel-head"><h2>Keranjang</h2><button className="icon-btn" onClick={() => setPanel(false)} aria-label="Tutup keranjang"><Icon name="close" /></button></div>
+            <div className="cart">
+              {cart.map((it, i) => (
+                <div key={i} className="citem">
+                  <div className="cmain" onClick={() => setEditIdx(i)}>
+                    <div className="cname">{it.name}</div>
+                    <div className="csub">{num(it.price)}{it.discount ? ` · potongan ${num(it.discount)}` : ''}{it.note ? ` · ${it.note}` : ''}</div>
+                  </div>
+                  <div className="qty">
+                    <button onClick={() => setQty(i, -1)} aria-label="Kurangi"><Icon name="minus" size={16} /></button>
+                    <span>{it.qty}</span>
+                    <button onClick={() => setQty(i, 1)} aria-label="Tambah"><Icon name="plus" size={16} /></button>
+                  </div>
+                  <div className="cline">{num(it.qty * it.price - it.discount)}</div>
+                </div>
+              ))}
             </div>
-          ))}
-          {!cart.length && <div className="empty">Keranjang kosong</div>}
-        </div>
-        <div className="cart-foot">
-          <div className="row"><span>Subtotal ({totals.qty} item)</span><b>{rp(totals.subtotal)}</b></div>
-          {totals.item_discount > 0 && <div className="row"><span>Potongan</span><b>−{rp(totals.item_discount)}</b></div>}
-          <div className="row actions">
-            <button className="btn" onClick={() => setCart([])} disabled={!cart.length}>Kosongkan</button>
-            <button className="btn primary big grow" disabled={!cart.length} onClick={() => setPay(true)} data-testid="btn-bayar">Bayar {rp(totals.total)}</button>
+            <div className="cart-foot">
+              <button className="btn ghost small" onClick={() => { setCart([]); setPanel(false); }}>Kosongkan</button>
+              <span className="muted">Ketuk item untuk ubah harga, potongan, catatan</span>
+            </div>
           </div>
-        </div>
-      </section>
+        )}
+        {cart.length > 0 ? (
+          <div className="cart-tag" data-testid="cart-tag">
+            <button className="tag-open" onClick={() => setPanel(!panel)} aria-expanded={panel} data-testid="cart-open">
+              <span><span className="tag-count">{totals.qty} item · lihat keranjang</span><span className="tag-total">{rp(totals.total)}</span></span>
+            </button>
+            <button className="btn accent" onClick={startPay} data-testid="btn-bayar">Bayar</button>
+          </div>
+        ) : null}
+      </div>
 
       {editIdx !== null && cart[editIdx] && (
         <ItemEditor item={cart[editIdx]} onClose={() => setEditIdx(null)}
@@ -114,9 +147,10 @@ export default function Kasir() {
         <ItemEditor isNew item={{ name: 'Buket custom', qty: 1, price: 0, cost: 0, discount: 0, type: 'buket' }} onClose={() => setCustom(false)}
           onSave={(it) => { setCart((c) => [...c, it]); setCustom(false); }} />
       )}
+      {engage && <EngageModal onClose={(r) => { setEngage(false); setPay(r); }} />}
       {pay && (
-        <Checkout items={cart} onClose={() => setPay(false)}
-          onDone={(order, results) => { setPay(false); setCart([]); setTab('produk'); setDone({ order, results }); }} />
+        <Checkout items={cart} engage={pay} onClose={() => setPay(null)}
+          onDone={(order, results) => { setPay(null); setCart([]); setDone({ order, results }); }} />
       )}
       {done && <Success order={done.order} results={done.results} onClose={() => setDone(null)} />}
     </div>
@@ -138,27 +172,95 @@ function ItemEditor({ item, isNew, onSave, onClose, onRemove }: { item: OrderIte
           <Field label="Harga satuan"><MoneyInput value={it.price} onChange={(price) => setIt({ ...it, price })} /></Field>
         </div>
         <div className="cols">
-          <Field label="Potongan baris (Rp)"><MoneyInput value={it.discount} onChange={(discount) => setIt({ ...it, discount: Math.min(discount, it.qty * it.price) })} /></Field>
-          {isNew && <Field label="HPP/modal per unit"><MoneyInput value={it.cost} onChange={(cost) => setIt({ ...it, cost })} /></Field>}
+          <Field label="Potongan item"><MoneyInput value={it.discount} onChange={(discount) => setIt({ ...it, discount: Math.min(discount, it.qty * it.price) })} /></Field>
+          {isNew && <Field label="Modal per unit (HPP)"><MoneyInput value={it.cost} onChange={(cost) => setIt({ ...it, cost })} /></Field>}
         </div>
-        <Field label="Catatan item (warna, ukuran, isi)"><input value={it.note || ''} onChange={(e) => setIt({ ...it, note: e.target.value })} placeholder="mis. mawar merah 20 tangkai, wrapping hitam" /></Field>
+        <Field label="Catatan item"><input value={it.note || ''} onChange={(e) => setIt({ ...it, note: e.target.value })} placeholder="mis. mawar merah 20 tangkai, wrapping hitam" /></Field>
       </div>
     </Modal>
   );
 }
 
-function Checkout({ items, onClose, onDone }: { items: OrderItem[]; onClose: () => void; onDone: (o: Order, r: PrintResult[]) => void }) {
+/** Pop-up sesekali: tawarkan diskon ulasan Google Maps dan 1–2 pertanyaan survei. */
+function EngageModal({ onClose }: { onClose: (r: EngageResult) => void }) {
   const settings = useLiveQuery(() => db.settings.get('toko'));
+  const cfg = storeCfg(settings).engage;
+  const [disc, setDisc] = useState(0);
+  const [ans, setAns] = useState<Record<string, string>>({});
+  const steps = [cfg.review_discount_min, Math.round((cfg.review_discount_min + cfg.review_discount_max) / 2 / 500) * 500, cfg.review_discount_max].filter((v, i, a) => v > 0 && a.indexOf(v) === i);
+  const qrSvg = useMemo(() => {
+    if (!cfg.review_url) return '';
+    const qr = qrcode(0, 'M');
+    qr.addData(cfg.review_url);
+    qr.make();
+    return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+  }, [cfg.review_url]);
+  const finish = () => onClose({ reviewDiscount: disc, survey: ans });
+  return (
+    <Modal title="Sebelum bayar" onClose={() => onClose({ reviewDiscount: 0, survey: ans })} wide
+      footer={<>
+        <button className="btn" onClick={() => onClose({ reviewDiscount: 0, survey: ans })}>Lewati</button>
+        <button className="btn primary grow" onClick={finish} data-testid="engage-next">Lanjut ke pembayaran</button>
+      </>}>
+      <div className="engage" data-testid="engage">
+        <div className="stack">
+          {qrSvg ? <div className="qr" dangerouslySetInnerHTML={{ __html: qrSvg }} /> : <div className="note warn">Link ulasan Google Maps belum diisi owner.</div>}
+          <span className="muted small">Minta pelanggan memindai kode ini dan memberi ulasan di Google Maps.</span>
+        </div>
+        <div className="stack">
+          <div>
+            <h3>Ulasan Google Maps</h3>
+            <p className="muted">Tawarkan potongan bila pelanggan sudah mengirim ulasan dan menunjukkannya.</p>
+            <div className="chips">
+              <button className={!disc ? 'on' : ''} onClick={() => setDisc(0)}>Tidak ulasan</button>
+              {steps.map((v) => <button key={v} className={disc === v ? 'on' : ''} onClick={() => setDisc(v)}>Diskon {rp(v)}</button>)}
+            </div>
+          </div>
+          {cfg.survey.slice(0, 2).map((s) => (
+            <div key={s.q}>
+              <h3>{s.q}</h3>
+              <div className="chips small">
+                {s.options.map((o) => <button key={o} className={ans[s.q] === o ? 'on' : ''} onClick={() => setAns({ ...ans, [s.q]: ans[s.q] === o ? '' : o })}>{o}</button>)}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; engage: EngageResult; onClose: () => void; onDone: (o: Order, r: PrintResult[]) => void }) {
+  const settings = useLiveQuery(() => db.settings.get('toko'));
+  const cfg = storeCfg(settings);
   const customers = useLiveQuery(() => db.customers.toArray(), []) || [];
   const orders = useLiveQuery(() => db.orders.where('due_at').above(addDays(new Date(), -1).toISOString()).toArray(), []) || [];
-  const methods = settings?.payment_methods?.length ? settings.payment_methods : ['Tunai', 'QRIS', 'Transfer'];
+  const [dev, setDev] = useState<DeviceConfig | null>(null);
+  useEffect(() => { getDeviceConfig().then(setDev); }, []);
+  const outlet = useLiveQuery(() => (dev ? db.outlets.get(dev.outletId) : undefined), [dev?.outletId]);
   const [f, setF] = useState({
-    name: '', phone: '', fulfillment: 'sekarang' as Fulfillment, due: toLocalInput(new Date(Date.now() + 3 * 3600e3)),
-    recipient: '', recipientPhone: '', address: '', fee: 0, card: '', notes: '', disc: 0,
-    method: 'Tunai', payType: 'lunas' as 'lunas' | 'dp' | 'nanti', dp: 0, received: 0,
+    name: '', phone: '', customerId: '' as string, fulfillment: 'sekarang' as Fulfillment, due: toLocalInput(new Date(Date.now() + 3 * 3600e3)),
+    recipient: '', recipientPhone: '', address: '', mapsInput: '', fee: 0, card: '', notes: '', disc: 0, florist: '',
+    method: 'Tunai', payType: 'lunas' as 'lunas' | 'dp' | 'nanti', dp: 0, received: 0, usePoints: false,
   });
+  const [geo, setGeo] = useState<{ point: LatLng; km: number; source: 'osrm' | 'estimasi'; calc: string } | null>(null);
+  const [geoBusy, setGeoBusy] = useState(false);
   const [busy, setBusy] = useState(false);
-  const t = cartTotals(items, f.disc, f.fulfillment === 'antar' ? f.fee : 0);
+
+  // pelanggan & poin
+  const cust = customers.find((c) => c.id === f.customerId) || (f.phone.replace(/\D/g, '').length >= 8 ? customers.find((c) => c.phone && c.phone === f.phone.replace(/[^\d+]/g, '')) : undefined);
+  const custOrders = useLiveQuery(() => (cust ? db.orders.where('customer_id').equals(cust.id).toArray() : Promise.resolve([] as Order[])), [cust?.id]) || [];
+  const balance = custOrders.filter((o) => !o.void).reduce((s, o) => s + (o.points_earned || 0) - (o.points_redeemed || 0), 0);
+
+  const base = cartTotals(items);
+  const goods = Math.max(0, base.subtotal - base.item_discount - f.disc - engage.reviewDiscount);
+  const L = cfg.loyalty;
+  const maxRedeem = L.enabled && cust && balance >= L.min_redeem ? Math.min(balance, Math.floor(goods / L.point_value)) : 0;
+  const redeem = f.usePoints ? maxRedeem : 0;
+  const pointsDisc = redeem * L.point_value;
+  const fee = f.fulfillment === 'antar' ? f.fee : 0;
+  const t = cartTotals(items, f.disc + engage.reviewDiscount + pointsDisc, fee);
+  const earn = cust || f.name || f.phone ? pointsEarned(t.total, fee, L) : 0;
   const payAmount = f.payType === 'lunas' ? t.total : f.payType === 'dp' ? Math.min(f.dp, t.total) : 0;
   const change = f.method === 'Tunai' ? Math.max(0, f.received - payAmount) : 0;
   const shortCash = f.method === 'Tunai' && payAmount > 0 && f.received > 0 && f.received < payAmount;
@@ -166,24 +268,49 @@ function Checkout({ items, onClose, onDone }: { items: OrderItem[]; onClose: () 
   const cap = settings?.daily_capacity || 0;
   const scheduled = dueIso ? scheduledQtyOn(orders, dayKey(dueIso), dayKey) : 0;
   const newQty = items.filter((i) => (i.type || 'buket') === 'buket').reduce((s, i) => s + i.qty, 0);
-  const sugg = (() => {
-    const xs = [payAmount, Math.ceil(payAmount / 50000) * 50000, Math.ceil(payAmount / 100000) * 100000, payAmount + 50000];
-    return [...new Set(xs.filter((x) => x >= payAmount && x > 0))].slice(0, 4);
-  })();
-  const matches = f.phone.length >= 3 || f.name.length >= 2
+  const sugg = [...new Set([payAmount, Math.ceil(payAmount / 50000) * 50000, Math.ceil(payAmount / 100000) * 100000, payAmount + 50000].filter((x) => x >= payAmount && x > 0))].slice(0, 4);
+  const matches = (f.phone.length >= 3 || f.name.length >= 2) && !f.customerId
     ? customers.filter((c) => (f.phone && (c.phone || '').includes(f.phone.replace(/\D/g, ''))) || (f.name && c.name.toLowerCase().includes(f.name.toLowerCase()))).slice(0, 4)
     : [];
   const needCustomer = f.payType !== 'lunas' || f.fulfillment !== 'sekarang';
   const invalid = (needCustomer && !f.name.trim()) || (f.fulfillment !== 'sekarang' && !dueIso) || (f.payType === 'dp' && (f.dp <= 0 || f.dp >= t.total)) || shortCash;
 
+  async function hitungOngkir() {
+    const input = f.mapsInput.trim();
+    if (!input) return;
+    setGeoBusy(true);
+    try {
+      const ref = outlet?.location || null;
+      let point: LatLng | null = parseLocalInput(input, ref);
+      if (!point && (isShortMapsLink(input) || /^https?:\/\//i.test(input))) point = await api<LatLng>('/api/geo/expand', { body: { url: input }, timeout: 20000 });
+      if (!point) throw new Error('Titik tidak terbaca. Tempel link Google Maps, Plus Code (mis. VP3+PR Stabat), atau koordinat.');
+      if (!ref) throw new Error('Lokasi toko belum diatur. Owner: Pengaturan › Toko › Cabang › Atur lokasi.');
+      let km: number, source: 'osrm' | 'estimasi';
+      try { km = (await api<{ km: number }>('/api/geo/route', { body: { from: ref, to: point }, timeout: 15000 })).km; source = 'osrm'; }
+      catch { km = Math.round(haversineKm(ref, point) * ROAD_FACTOR * 100) / 100; source = 'estimasi'; }
+      const r = deliveryFee(km, cfg.delivery);
+      const calc = `${r.kmBilled.toLocaleString('id-ID')} km × ${rp(cfg.delivery.rate)} = ${rp(r.raw)}${r.usedMin ? ` → minimum ${rp(cfg.delivery.min)}` : r.fee !== r.raw ? ` → dibulatkan ${rp(r.fee)}` : ''}`;
+      setGeo({ point, km, source, calc });
+      setF((x) => ({ ...x, fee: r.fee }));
+    } catch (e) {
+      setGeo(null);
+      toast((e as Error).message, 'err');
+    } finally {
+      setGeoBusy(false);
+    }
+  }
+
   async function submit() {
     setBusy(true);
     try {
       const input: CheckoutInput = {
-        items, orderDiscount: f.disc, extraFee: f.fulfillment === 'antar' ? f.fee : 0,
-        customer: { name: f.name, phone: f.phone }, fulfillment: f.fulfillment, dueAt: dueIso,
+        items, orderDiscount: f.disc + engage.reviewDiscount + pointsDisc, extraFee: fee,
+        customer: { id: cust?.id || null, name: f.name, phone: f.phone }, fulfillment: f.fulfillment, dueAt: dueIso,
         recipientName: f.recipient, recipientPhone: f.recipientPhone, deliveryAddress: f.address,
         cardMessage: f.card, notes: f.notes, payMethod: f.method, payAmount, cashReceived: f.received || payAmount,
+        florist: f.florist, manualDiscount: f.disc, reviewDiscount: engage.reviewDiscount, survey: engage.survey,
+        pointsRedeemed: redeem, pointsDiscount: pointsDisc, pointsEarned: earn,
+        delivery: f.fulfillment === 'antar' && geo ? { input: f.mapsInput, lat: geo.point.lat, lng: geo.point.lng, km: geo.km, km_source: geo.source, rate: cfg.delivery.rate, min: cfg.delivery.min } : null,
       };
       const order = await checkout(input);
       const results = await printOrder(order, ['kasir', 'produksi'], { skipRelay: true });
@@ -196,61 +323,82 @@ function Checkout({ items, onClose, onDone }: { items: OrderItem[]; onClose: () 
   }
 
   return (
-    <Modal title={`Pembayaran · ${rp(t.total)}`} onClose={onClose} wide
+    <Modal title="Pembayaran" onClose={onClose} wide
       footer={<button className="btn primary big grow" disabled={busy || invalid} onClick={submit} data-testid="btn-simpan">
-        {busy ? 'Menyimpan…' : f.payType === 'lunas' ? `Simpan & Cetak · ${rp(t.total)}` : `Simpan pesanan · bayar ${rp(payAmount)}`}
+        {busy ? 'Menyimpan…' : f.payType === 'lunas' ? `Simpan dan cetak · ${rp(t.total)}` : `Simpan pesanan · bayar ${rp(payAmount)}`}
       </button>}>
       <div className="checkout">
         <div className="stack">
-          <h3>Pelanggan</h3>
+          <div className="section-title">Pelanggan</div>
           <div className="cols">
-            <Field label={`Nama${needCustomer ? ' *' : ''}`}><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} data-testid="cust-name" /></Field>
-            <Field label="No. HP/WA"><input inputMode="tel" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></Field>
+            <Field label={`Nama${needCustomer ? ' (wajib)' : ''}`}><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value, customerId: '' })} data-testid="cust-name" /></Field>
+            <Field label="Nomor HP/WA"><input inputMode="tel" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value, customerId: '' })} /></Field>
           </div>
-          {matches.length > 0 && !customers.some((c) => c.name === f.name && c.phone === f.phone) && (
-            <div className="chips small">{matches.map((c) => <button key={c.id} onClick={() => setF({ ...f, name: c.name, phone: c.phone || '', address: f.address || c.address || '' })}>{c.name} {c.phone}</button>)}</div>
+          {matches.length > 0 && (
+            <div className="chips small">{matches.map((c) => <button key={c.id} onClick={() => setF({ ...f, customerId: c.id, name: c.name, phone: c.phone || '', address: f.address || c.address || '' })}>{c.name} {c.phone}</button>)}</div>
+          )}
+          {cust && L.enabled && (
+            <div className="loyal">
+              <Icon name="star" />
+              <div className="grow"><b>{num(balance)} poin</b><div className="muted">{maxRedeem ? `Bisa ditukar ${num(maxRedeem)} poin = ${rp(maxRedeem * L.point_value)}` : `Minimal tukar ${num(L.min_redeem)} poin`}</div></div>
+              {maxRedeem > 0 && <label className="check"><input type="checkbox" checked={f.usePoints} onChange={(e) => setF({ ...f, usePoints: e.target.checked })} />Tukar</label>}
+            </div>
           )}
 
-          <h3>Pengambilan</h3>
+          <div className="section-title">Pengambilan</div>
           <Seg value={f.fulfillment} onChange={(fulfillment) => setF({ ...f, fulfillment })}
             options={[{ value: 'sekarang', label: 'Ditunggu' }, { value: 'ambil', label: 'Ambil nanti' }, { value: 'antar', label: 'Diantar' }]} />
           {f.fulfillment !== 'sekarang' && (
-            <>
-              <Field label="Tanggal & jam" hint={cap ? <span className={scheduled + newQty > cap ? 'red' : ''}>Kapasitas {fmtDate(dueIso)}: {scheduled} + {newQty} dari {cap} buket</span> : undefined}>
-                <input type="datetime-local" value={f.due} onChange={(e) => setF({ ...f, due: e.target.value })} data-testid="due" />
-              </Field>
-            </>
+            <Field label="Tanggal dan jam" hint={cap ? <span className={scheduled + newQty > cap ? 'red' : ''}>Kapasitas {fmtDate(dueIso)}: {scheduled} + {newQty} dari {cap} buket</span> : undefined}>
+              <input type="datetime-local" value={f.due} onChange={(e) => setF({ ...f, due: e.target.value })} data-testid="due" />
+            </Field>
           )}
           {f.fulfillment === 'antar' && (
             <>
+              <Field label="Titik antar" hint="Tempel link Google Maps, Plus Code, atau koordinat dari pelanggan">
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input value={f.mapsInput} onChange={(e) => setF({ ...f, mapsInput: e.target.value })} placeholder="https://maps.app.goo.gl/… atau VP3+PR Stabat" data-testid="maps-input" />
+                  <button className="btn" onClick={hitungOngkir} disabled={geoBusy || !f.mapsInput.trim()} data-testid="btn-ongkir"><Icon name="pin" size={18} />{geoBusy ? 'Menghitung…' : 'Hitung'}</button>
+                </div>
+              </Field>
+              {geo && <div className="calc" data-testid="ongkir-calc">{geo.calc}<br />{geo.source === 'osrm' ? 'Jarak jalan (OpenStreetMap)' : `Perkiraan: garis lurus × ${String(ROAD_FACTOR).replace('.', ',')} (rute jalan tidak tersedia)`}</div>}
               <div className="cols">
                 <Field label="Nama penerima"><input value={f.recipient} onChange={(e) => setF({ ...f, recipient: e.target.value })} /></Field>
                 <Field label="HP penerima"><input inputMode="tel" value={f.recipientPhone} onChange={(e) => setF({ ...f, recipientPhone: e.target.value })} /></Field>
               </div>
-              <Field label="Alamat antar"><textarea rows={2} value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} /></Field>
-              <Field label="Ongkir"><MoneyInput value={f.fee} onChange={(fee) => setF({ ...f, fee })} /></Field>
+              <Field label="Alamat lengkap"><textarea rows={2} value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} /></Field>
+              <Field label="Ongkir" hint="Terisi otomatis dari jarak; bisa diubah"><MoneyInput value={f.fee} onChange={(fee) => setF({ ...f, fee })} ariaLabel="Ongkir" /></Field>
             </>
           )}
-          <Field label="Kartu ucapan"><textarea rows={2} value={f.card} onChange={(e) => setF({ ...f, card: e.target.value })} placeholder="Happy Graduation, Rina! 🎓" data-testid="card" /></Field>
-          <Field label="Catatan rangkaian (untuk perangkai)"><textarea rows={2} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="warna dominan pink, pita satin putih" data-testid="notes" /></Field>
+
+          <div className="section-title">Perangkai</div>
+          <div className="chips" data-testid="florists">
+            <button className={!f.florist ? 'on' : ''} onClick={() => setF({ ...f, florist: '' })}>Belum ditunjuk</button>
+            {cfg.florists.map((n) => <button key={n} className={f.florist === n ? 'on' : ''} onClick={() => setF({ ...f, florist: n })}>{n}</button>)}
+          </div>
+          <Field label="Kartu ucapan"><textarea rows={2} value={f.card} onChange={(e) => setF({ ...f, card: e.target.value })} placeholder="Happy graduation, Rina!" data-testid="card" /></Field>
+          <Field label="Catatan untuk perangkai"><textarea rows={2} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="warna dominan pink, pita satin putih" data-testid="notes" /></Field>
         </div>
 
         <div className="stack">
-          <h3>Ringkasan</h3>
+          <div className="section-title">Ringkasan</div>
           <div className="sum">
-            <div className="row"><span>Subtotal</span><span>{rp(t.subtotal)}</span></div>
-            {t.item_discount > 0 && <div className="row"><span>Potongan item</span><span>−{rp(t.item_discount)}</span></div>}
-            <div className="row"><span>Diskon transaksi</span><MoneyInput value={f.disc} onChange={(disc) => setF({ ...f, disc })} ariaLabel="Diskon transaksi" /></div>
-            {t.extra_fee > 0 && <div className="row"><span>Ongkir</span><span>{rp(t.extra_fee)}</span></div>}
-            <div className="row total"><span>Total</span><span>{rp(t.total)}</span></div>
+            {items.map((it, i) => <div key={i} className="row muted"><span>{it.qty}× {it.name}</span><span>{num(it.qty * it.price - it.discount)}</span></div>)}
+            <div className="row"><span>Subtotal</span><span>{rp(t.subtotal - t.item_discount)}</span></div>
+            <div className="row"><span>Diskon</span><MoneyInput value={f.disc} onChange={(disc) => setF({ ...f, disc })} ariaLabel="Diskon transaksi" /></div>
+            {engage.reviewDiscount > 0 && <div className="row"><span>Diskon ulasan Google Maps</span><span>−{rp(engage.reviewDiscount)}</span></div>}
+            {pointsDisc > 0 && <div className="row"><span>Tukar {num(redeem)} poin</span><span>−{rp(pointsDisc)}</span></div>}
+            {fee > 0 && <div className="row"><span>Ongkir</span><span>{rp(fee)}</span></div>}
+            <div className="row total"><span>Total</span><span data-testid="total">{rp(t.total)}</span></div>
+            {earn > 0 && <div className="row muted"><span>Poin didapat</span><span>+{num(earn)}</span></div>}
           </div>
-          <h3>Pembayaran</h3>
+          <div className="section-title">Pembayaran</div>
           <Seg value={f.payType} onChange={(payType) => setF({ ...f, payType, dp: payType === 'dp' && !f.dp ? Math.round((t.total * (settings?.dp_min_percent || 50)) / 100 / 1000) * 1000 : f.dp })}
             options={[{ value: 'lunas', label: 'Lunas' }, { value: 'dp', label: 'DP' }, { value: 'nanti', label: 'Bayar nanti' }]} />
           {f.payType === 'dp' && <Field label="Jumlah DP" hint={`Sisa ditagih saat ambil: ${rp(t.total - payAmount)}`}><MoneyInput value={f.dp} onChange={(dp) => setF({ ...f, dp })} /></Field>}
           {f.payType !== 'nanti' && (
             <>
-              <div className="chips methods">{methods.map((m) => <button key={m} className={f.method === m ? 'on' : ''} onClick={() => setF({ ...f, method: m })}>{m}</button>)}</div>
+              <div className="chips">{cfg.methods.map((m) => <button key={m} className={f.method === m ? 'on' : ''} onClick={() => setF({ ...f, method: m })}>{m}</button>)}</div>
               {f.method === 'Tunai' && (
                 <>
                   <Field label="Uang diterima"><MoneyInput value={f.received} onChange={(received) => setF({ ...f, received })} ariaLabel="Uang diterima" /></Field>
@@ -271,32 +419,34 @@ export function Success({ order, results, onClose }: { order: Order; results: Pr
   const payments = useLiveQuery(() => db.payments.where('order_id').equals(order.id).toArray(), [order.id]) || [];
   const [res, setRes] = useState(results);
   const [show, setShow] = useState<'struk' | 'tiket'>('struk');
-  const label = (r: PrintResult) => r.mode === 'relay' ? 'dikirim ke perangkat stasiun' : r.mode === 'none' ? 'printer tidak diatur' : r.mode === 'system' ? 'dialog cetak dibuka' : r.ok ? 'tercetak' : `gagal: ${r.error}`;
+  const label = (r: PrintResult) => r.mode === 'relay' ? 'dikirim ke perangkat ruang perangkai' : r.mode === 'none' ? 'printer belum diatur' : r.mode === 'system' ? 'dialog cetak dibuka' : r.ok ? 'tercetak' : `gagal: ${r.error}`;
   async function reprint(target: 'kasir' | 'produksi') {
     const r = await printOrder(order, [target], { copyLabel: target === 'kasir' ? 'CETAK ULANG' : undefined });
     setRes((x) => [...x.filter((y) => y.target !== target), ...r]);
     toast(r[0].ok ? 'Dikirim ke printer' : `Gagal: ${r[0].error}`, r[0].ok ? 'ok' : 'err');
   }
-  const doc = show === 'struk' ? buildStruk(order, payments, settings) : buildTiket(order, settings);
+  const mine = useLiveQuery(() => (order.customer_id ? db.orders.where('customer_id').equals(order.customer_id).toArray() : Promise.resolve([] as Order[])), [order.customer_id]) || [];
+  const bal = mine.filter((o) => !o.void).reduce((s, o) => s + (o.points_earned || 0) - (o.points_redeemed || 0), 0);
+  const doc = show === 'struk' ? buildStruk(order, payments, settings, { pointsBalance: order.customer_id && (order.points_earned || bal) ? bal : undefined }) : buildTiket(order, settings);
   return (
-    <Modal title="Transaksi berhasil ✓" onClose={onClose} wide footer={<button className="btn primary big grow" onClick={onClose} autoFocus data-testid="btn-baru">Transaksi baru</button>}>
+    <Modal title="Transaksi tersimpan" onClose={onClose} wide footer={<button className="btn primary big grow" onClick={onClose} autoFocus data-testid="btn-baru">Transaksi baru</button>}>
       <div className="success">
         <div className="stack">
           <div className="big-no" data-testid="order-no">{order.no}</div>
-          <div className="muted">{rp(order.total)} · {order.fulfillment === 'sekarang' ? 'ditunggu' : `${order.fulfillment === 'antar' ? 'antar' : 'ambil'} ${fmtDate(order.due_at)}`}</div>
-          {(['kasir', 'produksi'] as const).map((t) => {
-            const r = res.find((x) => x.target === t);
+          <div className="muted">{rp(order.total)} · {order.fulfillment === 'sekarang' ? 'ditunggu' : `${order.fulfillment === 'antar' ? 'antar' : 'ambil'} ${fmtDate(order.due_at)}`}{order.florist ? ` · perangkai ${order.florist}` : ''}</div>
+          {(['kasir', 'produksi'] as const).map((tg) => {
+            const r = res.find((x) => x.target === tg);
             return (
-              <div key={t} className={`print-row ${r && !r.ok ? 'bad' : ''}`} data-testid={`print-${t}`}>
-                <div><b>{t === 'kasir' ? 'Struk pelanggan (printer kasir)' : 'Tiket produksi (ruang perangkai)'}</b><div className="muted">{r ? label(r) : '-'}</div></div>
-                <button className="btn" onClick={() => reprint(t)}>Cetak ulang</button>
+              <div key={tg} className={`print-row ${r && !r.ok ? 'bad' : ''}`} data-testid={`print-${tg}`}>
+                <div><b>{tg === 'kasir' ? 'Struk pelanggan' : 'Tiket produksi'}</b><div className="muted">{r ? label(r) : '-'}</div></div>
+                <button className="btn" onClick={() => reprint(tg)}><Icon name="print" size={18} />Cetak ulang</button>
               </div>
             );
           })}
         </div>
         <div>
           <Seg value={show} onChange={setShow} options={[{ value: 'struk', label: 'Struk' }, { value: 'tiket', label: 'Tiket' }]} />
-          <pre className="receipt" data-testid="preview">{previewText(doc, 58).join('\n')}</pre>
+          <ReceiptPreview doc={doc} width={58} testId="preview" />
         </div>
       </div>
     </Modal>

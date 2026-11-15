@@ -136,7 +136,16 @@ Catatan: Chrome mungkin meminta Anda mengetik “allow pasting” sebelum bisa m
 
 Sinkron berjalan sendiri. Lencana di kanan atas: hijau “Tersinkron”, kuning “Menyinkron · n” (n perubahan sedang dikirim), merah “Offline · n menunggu” (tersimpan aman di perangkat, terkirim otomatis saat internet kembali).
 
-## 8. Lupa Kata Sandi
+## 8. Ongkir, Perangkai, Poin, Ulasan, dan Survei
+1. **Lokasi toko** (sekali per cabang, owner): Pengaturan › Toko & cabang › tempel link Google Maps toko atau koordinat › Simpan.
+2. **Ongkir otomatis**: di Pembayaran pilih *Diantar*, tempel link Google Maps, Plus Code (mis. `VP3+PR Stabat`), atau koordinat dari pelanggan › **Hitung**. Rumus: ongkir = maks(Rp 15.000, km × Rp 3.000), km dibulatkan ke atas 0,1 km dan rupiah dibulatkan ke atas Rp 1.000. Jarak memakai rute jalan OpenStreetMap (layanan gratis OSRM lewat server); bila tidak tersedia, garis lurus × 1,3 dan ditandai "Perkiraan". Nominal tetap bisa diubah kasir. Tarif, minimum, dan pembulatan diatur owner di Pengaturan › Promo, poin & ongkir.
+3. **Perangkai**: pilih Iin Ruslinda, Nazra, Fira, atau Mirna saat pembayaran. Nama tercetak di tiket produksi, bisa difilter di menu Produksi, dan muncul di Laporan › Analisis (beban kerja). Daftar nama diatur owner.
+4. **Poin loyalitas**: bawaan 1 poin per Rp 10.000 (tanpa ongkir), 1 poin = Rp 100, minimal tukar 50 poin; tingkat Silver ≥ Rp 1 jt dan Gold ≥ Rp 3 jt belanja 12 bulan. Poin muncul di kasir saat nomor HP pelanggan dikenali, dan profil lengkap ada di menu Pelanggan.
+5. **Pop-up ulasan & survei**: muncul di kasir setiap N transaksi per perangkat (bawaan 5). Berisi QR ulasan Google Maps, pilihan diskon Rp 5.000–10.000, dan 2 pertanyaan survei. Hasil survei ada di Laporan › Analisis penjualan.
+6. **Admin & cabang**: buat akun Admin (Tiara, Ririn di Toko Utama; Putri di Cabang 1) di Pengaturan › Pengguna dan pilih cabangnya. Perangkat otomatis mengikuti cabang akun yang masuk. Tambah cabang di Pengaturan › Toko & cabang.
+7. **Ganti akun / keluar**: ketuk nama di kanan atas.
+
+## 9. Lupa Kata Sandi
 1. **Lewat email (disarankan).** Owner mengatur sekali: Pengaturan › Email › isi Gmail toko dan *app password* (Akun Google › Keamanan › Verifikasi 2 Langkah aktif › myaccount.google.com/apppasswords) › Simpan › Kirim email uji. Lalu isi email tiap pengguna di Pengaturan › Pengguna. Di halaman masuk, ketuk **Lupa kata sandi?**, masukkan username atau email, masukkan kode 6 digit dari email (berlaku 15 menit), lalu buat sandi baru.
 2. **Staf lupa sandi**: owner cukup menekan tombol **Sandi** di Pengaturan › Pengguna.
 3. **Darurat (owner lupa, email belum diatur)**: di komputer server, dalam folder proyek:
@@ -145,10 +154,10 @@ Sinkron berjalan sendiri. Lencana di kanan atas: hijau “Tersinkron”, kuning 
    node server/src/reset-password.js <username> '<sandi-baru>'
    ```
 
-## 9. Pindah Server atau Basis Data
+## 10. Pindah Server atau Basis Data
 Setiap basis data punya ID unik. Bila perangkat masuk ke server dengan ID berbeda (misalnya pindah dari PC ke VPS dengan basis data baru), data lokal di perangkat dikosongkan lalu ditarik ulang dari server baru, supaya data dua server tidak tercampur. Bila ada perubahan yang belum terkirim, aplikasi meminta konfirmasi dulu. Untuk memindahkan data lama ke server baru, salin berkas `data/kasir.db` dan `data/kasir.db-wal` saat server **mati**.
 
-## 10. Keamanan
+## 11. Keamanan
 1. Gunakan HTTPS untuk server publik. HTTP hanya untuk uji di jaringan lokal.
 2. Satu akun per orang; nonaktifkan akun karyawan yang keluar (Pengaturan › Pengguna).
 3. Token login berlaku 180 hari per perangkat. Kehilangan HP: nonaktifkan akun, lalu aktifkan lagi dengan kata sandi baru.
