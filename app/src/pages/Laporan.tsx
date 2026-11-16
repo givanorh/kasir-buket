@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../lib/db';
 import { buildAnalysis, buildReport, scheduledQtyOn } from '../lib/calc';
 import { addDays, dayKey, endOfDay, fmtDate, num, rp, startOfDay } from '../lib/format';
-import { Field, Seg } from '../components/ui';
+import { Field, Seg, TabPanel } from '../components/ui';
 import { storeCfg } from '../lib/settings';
 import type { HppMethod, Order, Settings } from '../lib/types';
 import { save } from '../lib/store';
@@ -72,7 +72,8 @@ export default function Laporan() {
         {outlets.length > 1 && <select value={outlet} onChange={(e) => setOutlet(e.target.value)} aria-label="Cabang"><option value="">Semua cabang</option>{outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select>}
         <span className="muted">{fmtDate(from.toISOString())} s.d. {fmtDate(to.toISOString())}{r.voided ? ` · ${r.voided} transaksi batal tidak dihitung` : ''}</span>
       </div>
-      {view === 'analisis' ? <Analisis orders={orders} from={from} to={to} outletId={outlet || undefined} /> : <>
+      <TabPanel k={view} order={['labarugi', 'analisis']}>
+      {view === 'analisis' ? <Analisis orders={orders} from={from} to={to} outletId={outlet || undefined} /> : <div className="page">
 
       <div className="kpis" data-testid="kpis">
         <div className="kpi"><span>Transaksi</span><b>{num(r.count)}</b><i>{num(r.qty)} item</i></div>
@@ -142,7 +143,8 @@ export default function Laporan() {
         </div>
         {!cap && <Field label="" hint="Atur kapasitas harian di Pengaturan › Toko untuk peringatan hari ramai (Valentine, wisuda)."><span /></Field>}
       </section>
-      </>}
+      </div>}
+      </TabPanel>
     </div>
   );
 }

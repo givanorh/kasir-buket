@@ -1,5 +1,6 @@
 // Nilai bawaan pengaturan toko. Pengaturan lama yang belum punya kolom baru tetap berjalan dengan nilai ini.
 import type { DeliveryCfg, EngageCfg, LoyaltyCfg, Settings, SurveyQuestion } from './types';
+import { DEFAULT_REVIEW_BUDGET, DEFAULT_REVIEW_MIN_SPEND } from './review';
 
 export const DEFAULT_FLORISTS = ['Iin Ruslinda', 'Nazra', 'Fira', 'Mirna'];
 export const DEFAULT_DELIVERY: DeliveryCfg = { rate: 3000, min: 15000, round: 1000 };
@@ -41,6 +42,8 @@ export const DEFAULT_ENGAGE: EngageCfg = {
   review_url: '',
   review_discount_min: 5000,
   review_discount_max: 10000,
+  review_budget: DEFAULT_REVIEW_BUDGET,
+  review_min_spend: DEFAULT_REVIEW_MIN_SPEND,
   survey: DEFAULT_SURVEY,
   per_popup: 2,
 };

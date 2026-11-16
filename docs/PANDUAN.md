@@ -126,7 +126,7 @@ Tiket yang gagal tercetak tampil di menu Produksi dengan tombol “Ulangi gagal�
 Catatan: Chrome mungkin meminta Anda mengetik “allow pasting” sebelum bisa menempel kode di Console. Itu pengaman bawaan Chrome; jalankan hanya skrip yang Anda kenal.
 
 ## 7. Pemakaian Harian
-1. **Buka shift** (menu Shift): isi kas awal.
+1. **Buka shift** (menu Shift, atau langsung di halaman Kasir): isi kas awal. Akun Admin dan Perangkai tidak bisa memakai Kasir sebelum shift dibuka; owner tetap bisa.
 2. **Transaksi**: pilih produk › Bayar › isi pelanggan, pengambilan, kartu ucapan, catatan › pilih Lunas/DP › Simpan. Dua cetakan keluar otomatis.
 3. **Ruang perangkai**: menu Produksi, ketuk “Mulai rangkai” › “Selesai dirangkai” › “Sudah diambil”. Status langsung terlihat di kasir.
 4. **Pelunasan DP**: Pesanan › Belum lunas › pilih › Catat pembayaran.
@@ -149,7 +149,7 @@ Sinkron berjalan sendiri. Lencana di kanan atas: hijau “Tersinkron”, kuning 
    - Syarat: email pengirim sudah diatur (Pengaturan › Email). Sekali per perangkai: simpan alamat Gmail toko di Kontak Google perangkai, atau di Google Calendar › Setelan › Setelan acara › "Tambahkan undangan ke kalender saya" pilih "Dari semua orang". Pastikan dengan tombol **Uji** lalu **Batalkan uji**.
    - Riwayat pengiriman (terkirim, menunggu, gagal) tampil di tab yang sama. Gagal kirim dicoba ulang otomatis sampai 8 kali dengan jeda 30 detik s.d. 1 jam.
 5. **Poin loyalitas**: bawaan 1 poin per Rp 10.000 (tanpa ongkir), 1 poin = Rp 100, minimal tukar 50 poin; tingkat Silver ≥ Rp 1 jt dan Gold ≥ Rp 3 jt belanja 12 bulan. Poin muncul di kasir saat nomor HP pelanggan dikenali, dan profil lengkap ada di menu Pelanggan.
-6. **Pop-up ulasan & survei**: muncul di kasir setiap N transaksi per perangkat (bawaan 5). Berisi QR ulasan Google Maps, pilihan diskon Rp 5.000–10.000, dan 1–2 pertanyaan yang diacak dari bank pertanyaan.
+6. **Pop-up ulasan & survei**: muncul di kasir setiap N transaksi per perangkat (bawaan 5). Berisi QR ulasan Google Maps, kolom diskon ulasan beserta sisa budget bulan ini (lihat 8b.4), dan 1–2 pertanyaan yang diacak dari bank pertanyaan.
 7. **Bank survei** (owner, Pengaturan › Survei): 20 pertanyaan bawaan (sumber info, acara, penerima, budget, frekuensi, alasan memilih, minat produk, kanal pesan, pesaing, waktu pesan, waktu tunggu, antar, media sosial, cara bayar, kepuasan, rekomendasi, domisili, usia, produk tambahan, promo). Bisa diubah, ditambah, dihapus, atau dinonaktifkan. Jumlah jawaban per pertanyaan tampil di tab itu; rinciannya di Laporan › Analisis penjualan.
 8. **Admin & cabang**: buat akun Admin (Tiara, Ririn di Toko Utama; Putri di Cabang 1) di Pengaturan › Pengguna dan pilih cabangnya. Perangkat otomatis mengikuti cabang akun yang masuk. Tambah cabang di Pengaturan › Toko & cabang.
 9. **Ganti akun / keluar**: ketuk nama di kanan atas.
@@ -175,6 +175,20 @@ Sinkron berjalan sendiri. Lencana di kanan atas: hijau “Tersinkron”, kuning 
 6. **Belanja bahan** (owner): catat manual (tanggal, bahan, kategori, jumlah, satuan, harga satuan, pemasok) atau **Unggah CSV/Excel** (.xlsx atau .csv; Google Sheets › File › Download). Baris pertama berisi judul kolom; wajib kolom Bahan dan Harga satuan atau Total. Tanggal boleh `2026-11-16`, `16/11/2026`, atau tanggal Excel. Unggah ulang berkas yang sama tidak menggandakan data. Tombol **Template** mengunduh contoh berkas.
 7. **Dasar HPP laba rugi** (Laporan atau Belanja bahan): *Gabungan* = Σ modal produk terjual + Σ belanja bahan periode (bawaan); *Belanja bahan* = metode periodik (cocok bila HPP produk belum diisi); *Modal produk* = hanya HPP produk (pilih bila HPP produk sudah dihitung dari bahan yang sama, agar tidak terhitung dua kali). Asumsi metode periodik: bahan yang dibeli habis dipakai pada periode yang sama.
 
+## 8b. Fitur Versi 1.5
+1. **Pembayaran dimulai dari Nomor HP**: kolom pertama di jendela Pembayaran adalah **Nomor HP** dan langsung aktif. Nomor yang sudah tersimpan mengisi otomatis nama, alamat, dan saldo poin (tanda centang hijau). Nomor boleh dikosongkan atau belum tersimpan: transaksi tetap jalan sebagai pelanggan bukan member, tanpa poin. Centang **Daftarkan member** bila pelanggan setuju.
+2. **Wajib buka shift**: Admin dan Perangkai melihat kartu "Buka shift untuk mulai berjualan" di halaman Kasir sampai shift dibuka (isi kas awal). Owner tetap bisa berjualan tanpa shift dan hanya melihat catatan kuning.
+3. **Jadikan event rutin** (Kalender, owner): event berjenis *lonjakan data* dan daftar lonjakan omzet punya tombol **Jadikan event rutin**. Nama diusulkan dari tanggal (mis. lonjakan 31 Jul–2 Agu menjadi "National Girlfriend Day (1 Agu)", lonjakan 1–3 Okt menjadi "National Boyfriend Day (3 Okt)"). Event rutin bertanda **Rutin** dan otomatis muncul tiap tahun pada tanggal yang sama (29 Feb menjadi 28 Feb pada tahun bukan kabisat).
+4. **Diskon ulasan Google Maps** (owner, Pengaturan › Promo, poin & ongkir):
+   - **Budget per bulan** (bawaan Rp 250.000; Rp 0 = tanpa batas). Pemakaian dihitung dari transaksi tidak void pada bulan kalender berjalan di semua perangkat yang sudah tersinkron.
+   - **Belanja minimal** (bawaan Rp 50.000): subtotal setelah potongan item. Di bawah nilai ini diskon ulasan tidak ditawarkan.
+   - **Kolom diskon**: bawaan Ulasan bintang Rp 5.000, Ulasan + komentar Rp 7.500, Ulasan + foto buket Rp 10.000. **Tambah kolom diskon** untuk kolom baru; tiap kolom bisa nominal (Rp) atau persen dengan batas maksimal, diaktifkan/nonaktifkan, diganti nama, atau dihapus. Persen dibulatkan ke bawah kelipatan Rp 100. Contoh 5% maks Rp 15.000 pada belanja Rp 142.000: 142.000 × 5% = 7.100.
+   - **Pop-up kasir** menampilkan sisa budget bulan ini. Kolom yang nominalnya melebihi sisa budget atau belanja di bawah minimal dinonaktifkan beserta alasannya. Nama kolom yang dipilih tercatat di transaksi dan tampil di ringkasan pembayaran.
+   - **Saran budget** dihitung dari data 12 bulan kalender penuh terakhir (tanpa void dan rekap ≥ Rp 10 jt): transaksi per bulan ÷ frekuensi pop-up × 40% (asumsi pelanggan mau mengulas) × rata-rata diskon kolom aktif, dibulatkan ke atas kelipatan Rp 50.000. Data toko Nov 2025–Okt 2026: 4.571 ÷ 12 = 380,9 transaksi/bulan; ÷ 5 = 76,2 tawaran; × 40% × Rp 7.500 = Rp 228.550 → Rp 250.000. Angka 40% adalah asumsi awal; sesuaikan setelah 1–2 bulan berjalan dengan melihat jumlah transaksi berdiskon ulasan.
+   - Batas budget dihitung di perangkat. Dua perangkat yang sedang offline bisa sama-sama memberi diskon sehingga pemakaian sedikit melebihi budget; selisihnya tetap tercatat di laporan.
+   - Kebijakan konten Google Maps melarang memberi imbalan (termasuk diskon) sebagai ganti ulasan. Ulasan yang terdeteksi bisa dihapus Google dan profil toko bisa dibatasi. Pertimbangkan menamai kolom sebagai imbalan mengisi survei atau masukan, bukan imbalan ulasan.
+5. **Tampilan & animasi**: penanda menu aktif bergeser halus, perpindahan halaman dan tab berarah, kartu produk muncul berurutan saat pertama dimuat, tombol mengecil saat ditekan, jendela muncul dengan efek membesar, dan latar bermotif garis kelopak tipis. Animasi hanya memakai transform dan opacity, 150–600 ms, dan dimatikan bila perangkat mengaktifkan pengaturan kurangi gerak.
+
 ## 9. Lupa Kata Sandi
 1. **Lewat email (disarankan).** Owner mengatur sekali: Pengaturan › Email › isi Gmail toko dan *app password* (Akun Google › Keamanan › Verifikasi 2 Langkah aktif › myaccount.google.com/apppasswords) › Simpan › Kirim email uji. Lalu isi email tiap pengguna di Pengaturan › Pengguna. Di halaman masuk, ketuk **Lupa kata sandi?**, masukkan username atau email, masukkan kode 6 digit dari email (berlaku 15 menit), lalu buat sandi baru.
 2. **Staf lupa sandi**: owner cukup menekan tombol **Sandi** di Pengaturan › Pengguna.
@@ -198,6 +212,11 @@ Setiap basis data punya ID unik. Bila perangkat masuk ke server dengan ID berbed
 - **systemd**: pengelola layanan Linux; menjalankan server otomatis saat VPS menyala dan memulai ulang bila berhenti.
 - **Artifact (GitHub Actions)**: berkas hasil build yang bisa diunduh dari halaman run.
 - **Stasiun cetak**: perangkat yang otomatis mencetak tugas cetak kiriman perangkat lain.
+- **Event rutin**: event yang diproyeksikan ke setiap tahun pada tanggal dan bulan yang sama tanpa perlu disalin manual.
+- **Budget diskon ulasan**: batas total nominal diskon ulasan dalam satu bulan kalender; sisa = budget − Σ diskon ulasan transaksi tidak void bulan itu.
+- **Kolom diskon**: satu pilihan diskon di pop-up kasir, berupa nominal tetap atau persen dari belanja dengan batas maksimal.
+- **Shift**: periode kerja satu kasir dari buka sampai tutup laci, dipakai untuk merekap uang tunai.
+- **Kurangi gerak (prefers-reduced-motion)**: pengaturan aksesibilitas perangkat; bila aktif, animasi aplikasi dimatikan.
 - **Port 9100**: port standar pencetakan mentah (raw) pada printer jaringan.
 - **DHCP reservation**: pengaturan router agar perangkat tertentu selalu mendapat IP yang sama.
 - **OpenRouteService (ORS)**: layanan rute gratis berbasis OpenStreetMap dari HeiGIT (Universitas Heidelberg); dipakai untuk jarak rute jalan kendaraan.

@@ -4,7 +4,7 @@ import { db } from './lib/db';
 import { loadSession, logout, useSession } from './lib/session';
 import { sync, useSyncStatus } from './lib/sync';
 import { startPrintStation, stopPrintStation } from './lib/print';
-import { Toasts } from './components/ui';
+import { Toasts, useThumb } from './components/ui';
 import { Icon } from './components/icons';
 import { DueAlert, usePendingCancels } from './components/Alerts';
 import Kalender from './pages/Kalender';
@@ -115,6 +115,8 @@ function Shell() {
   const allowed = PAGES.filter((p) => p.roles.includes(role));
   const page = allowed.find((p) => p.key === hash.split('?')[0]) || allowed[0];
   const pendingCancels = usePendingCancels().length;
+  const navRef = useRef<HTMLElement>(null);
+  const pill = useThumb(navRef, 'a.on', [page.key, allowed.length]);
   const store = useLiveQuery(() => db.settings.get('toko'));
 
   useEffect(() => {
@@ -127,7 +129,8 @@ function Shell() {
 
   return (
     <div className="shell">
-      <nav className="side">
+      <nav className={`side ${pill ? 'has-pill' : ''}`} ref={navRef}>
+        {pill && <span className="nav-pill" style={pill} aria-hidden="true" />}
         <div className="brand"><span className="brand-mark"><Icon name="flower" /></span><span>{store?.store_name || 'Kasir Buket'}</span></div>
         {allowed.map((p) => (
           <a key={p.key} href={`#/${p.key}`} className={p === page ? 'on' : ''}><Icon name={p.key} /><span>{p.label}</span>
@@ -142,7 +145,7 @@ function Shell() {
             <UserMenu />
           </div>
         </header>
-        <div className="content">{page.key !== 'pengaturan' && <DueAlert />}{page.el()}</div>
+        <div className="content">{page.key !== 'pengaturan' && <DueAlert />}<div key={page.key} className="view-enter">{page.el()}</div></div>
       </div>
     </div>
   );

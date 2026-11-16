@@ -1,5 +1,5 @@
 import { Icon } from './icons';
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { num, parseRp } from '../lib/format';
 
 export function Modal({ title, onClose, children, footer, wide }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean }) {
@@ -50,9 +50,41 @@ export function MoneyInput({ value, onChange, autoFocus, placeholder, ariaLabel 
   );
 }
 
+/**
+ * Posisi elemen aktif di dalam wadah (untuk "pil" yang bergeser: segmented control & menu samping).
+ * Diukur sebelum layar digambar (useLayoutEffect) dan saat ukuran berubah (ResizeObserver).
+ */
+export function useThumb(ref: RefObject<HTMLElement | null>, selector: string, deps: unknown[]): CSSProperties | null {
+  const [box, setBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => {
+      const a = el.querySelector<HTMLElement>(selector);
+      setBox(a ? { x: a.offsetLeft, y: a.offsetTop, w: a.offsetWidth, h: a.offsetHeight } : null);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, deps); // eslint-disable-line
+  return box ? { transform: `translate(${box.x}px, ${box.y}px)`, width: box.w, height: box.h } : null;
+}
+
+/** Isi tab yang masuk dari arah tab yang dipilih (kanan bila tab berikutnya, kiri bila sebelumnya). */
+export function TabPanel({ k, order, children }: { k: string; order: string[]; children: ReactNode }) {
+  const prev = useRef(k);
+  const dir = useRef(0);
+  if (prev.current !== k) { dir.current = order.indexOf(k) >= order.indexOf(prev.current) ? 1 : -1; prev.current = k; }
+  return <div key={k} className="tab-enter" style={{ ['--dir' as string]: dir.current }}>{children}</div>;
+}
+
 export function Seg<T extends string>({ value, options, onChange }: { value: T; options: { value: T; label: ReactNode }[]; onChange: (v: T) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const thumb = useThumb(ref, 'button[aria-checked="true"]', [value, options.length]);
   return (
-    <div className="seg" role="radiogroup">
+    <div className={`seg ${thumb ? 'has-thumb' : ''}`} role="radiogroup" ref={ref}>
+      {thumb && <span className="seg-thumb" style={thumb} aria-hidden="true" />}
       {options.map((o) => (
         <button type="button" key={o.value} role="radio" aria-checked={value === o.value} className={value === o.value ? 'on' : ''} onClick={() => onChange(o.value)}>{o.label}</button>
       ))}

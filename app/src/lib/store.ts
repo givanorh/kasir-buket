@@ -130,6 +130,7 @@ export interface CheckoutInput {
   pointsRedeemed?: number;
   pointsDiscount?: number;
   reviewDiscount?: number;
+  reviewTier?: string;
   survey?: Record<string, string>;
   pointsEarned?: number;
 }
@@ -191,6 +192,7 @@ export async function checkout(inp: CheckoutInput): Promise<Order> {
     points_redeemed: isMember ? inp.pointsRedeemed || 0 : 0,
     points_discount: isMember ? inp.pointsDiscount || 0 : 0,
     review_discount: inp.reviewDiscount || 0,
+    review_tier: inp.reviewDiscount ? inp.reviewTier || undefined : undefined,
     survey: inp.survey && Object.keys(inp.survey).length ? inp.survey : undefined,
     points_earned: isMember ? inp.pointsEarned || 0 : 0,
   };
@@ -262,6 +264,13 @@ export async function voidOrder(order: Order, reason: string, extra: Partial<Ord
     writes.push({ c: 'stock_moves', id: newId('m'), patch: { product_id: m.product_id, outlet_id: m.outlet_id, qty: -m.qty, reason: 'batal', ref_id: order.id } });
   }
   await saveMany(writes);
+}
+
+/** Buka shift di perangkat ini dengan kas awal laci. */
+export async function openShift(openingCash: number) {
+  const s = getSession();
+  const cfg = await getDeviceConfig();
+  await save<Shift>('shifts', newId('s'), { outlet_id: cfg.outletId, device_id: s.deviceId, user_id: s.user!.id, user_name: s.user!.name, opened_at: nowIso(), opening_cash: openingCash, closed_at: null });
 }
 
 /** Admin: ajukan pembatalan pesanan lunas ke owner (wajib beralasan). */

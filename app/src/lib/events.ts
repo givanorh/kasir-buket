@@ -122,3 +122,42 @@ export function spikeDays(dl: Daily, year: number, minRatio = 2.5) {
 
 export const covers = (ev: Pick<CalEvent, 'date' | 'end'>, day: string, pad1 = 0) => day >= shift(ev.date, -pad1) && day <= shift(ev.end || ev.date, pad1);
 export const shiftDay = shift;
+
+// ---------- event rutin (berulang tiap tahun) ----------
+const leap = (y: number) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+const toYear = (k: string, y: number) => (k.slice(5) === '02-29' && !leap(y) ? `${y}-02-28` : `${y}${k.slice(4)}`);
+
+export type Occurrence = CalEvent & { baseId: string; projected: boolean };
+
+/** Kejadian event pada tahun `year`: event biasa yang jatuh di tahun itu + event rutin yang diproyeksikan ke tahun itu. */
+export function occurrences(events: CalEvent[], year: number): Occurrence[] {
+  const out: Occurrence[] = [];
+  for (const e of events) {
+    if (e.deleted) continue;
+    const y = Number(e.date.slice(0, 4));
+    if (e.recurring && y !== year) {
+      const endShift = e.end ? Number(e.end.slice(0, 4)) - y : 0;
+      out.push({ ...e, date: toYear(e.date, year), end: e.end ? toYear(e.end, year + endShift) : undefined, baseId: e.id, projected: true });
+    } else if (e.date.startsWith(String(year)) || (e.end || '').startsWith(String(year))) {
+      out.push({ ...e, baseId: e.id, projected: false });
+    }
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/** Hari peringatan yang sering memicu pembelian buket (bulan-hari). */
+export const KNOWN_DAYS: Record<string, string> = {
+  '02-14': 'Valentine', '03-08': 'Hari Perempuan Internasional', '04-21': 'Hari Kartini',
+  '08-01': 'National Girlfriend Day', '10-03': 'National Boyfriend Day',
+  '11-12': 'Hari Ayah Nasional', '11-25': 'Hari Guru Nasional', '12-22': 'Hari Ibu',
+};
+const BLN_PENDEK = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+
+/** Usulan nama event rutin dari tanggal lonjakan: cari hari peringatan di rentang event (±2 hari). */
+export function suggestRecurring(e: Pick<CalEvent, 'date' | 'end' | 'name'>): { name: string; day?: string } {
+  for (let k = shift(e.date, -2); k <= shift(e.end || e.date, 2); k = shift(k, 1)) {
+    const hit = KNOWN_DAYS[k.slice(5)];
+    if (hit) return { name: `${hit} (${Number(k.slice(8))} ${BLN_PENDEK[Number(k.slice(5, 7)) - 1]})`, day: k };
+  }
+  return { name: e.name.replace(/^(puncak|lonjakan)\s+/i, '').replace(/\s*\(penyebab belum diketahui\)/i, '') };
+}

@@ -46,12 +46,18 @@ export interface LoyaltyCfg {
 }
 /** Pertanyaan survei. `id` menjadi kunci jawaban di `order.survey`, sehingga teks boleh diubah tanpa memecah hasil. */
 export interface SurveyQuestion { id: string; q: string; options: string[]; active?: boolean }
+/** Satu kolom diskon ulasan: nominal tetap (Rp) atau persen dari belanja dengan batas maksimal. */
+export interface ReviewTier { id: string; label: string; type: 'rp' | 'persen'; value: number; max?: number; active?: boolean }
 export interface EngageCfg {
   enabled: boolean;
   every_n: number; // munculkan pop-up tiap N transaksi per perangkat
   review_url: string; // link ulasan Google Maps
-  review_discount_min: number;
+  review_discount_min: number; // v1.2–1.4: dipakai hanya bila review_tiers belum diatur
   review_discount_max: number;
+  /** Kolom diskon ulasan yang ditawarkan di pop-up (v1.5). Kosong = diturunkan dari min/maks. */
+  review_tiers?: ReviewTier[];
+  review_budget: number; // budget diskon ulasan per bulan kalender (Rp); 0 = tanpa batas
+  review_min_spend: number; // belanja minimal (subtotal setelah potongan item) agar boleh diskon ulasan
   survey: SurveyQuestion[]; // bank pertanyaan; pop-up memilih `per_popup` pertanyaan aktif secara acak
   per_popup: number;
 }
@@ -134,6 +140,7 @@ export interface Order extends Base {
   points_redeemed?: number;
   points_discount?: number;
   review_discount?: number;
+  review_tier?: string; // nama kolom diskon ulasan yang dipilih
   survey?: Record<string, string>; // id pertanyaan -> jawaban (data v1.2: teks pertanyaan -> jawaban)
   cancel_request?: CancelRequest | null; // pengajuan pembatalan pesanan lunas oleh Admin, diputus owner
 }
@@ -167,7 +174,8 @@ export interface Purchase extends Base {
 
 export type EventKind = 'libur' | 'momen' | 'musim' | 'lokal' | 'data' | 'toko';
 /** Event kalender owner: satu hari (date) atau rentang (date..end). */
-export interface CalEvent extends Base { date: string; end?: string; name: string; kind: EventKind; note?: string }
+/** `recurring`: berulang setiap tahun pada tanggal (bulan-hari) yang sama. */
+export interface CalEvent extends Base { date: string; end?: string; name: string; kind: EventKind; note?: string; recurring?: boolean }
 
 export interface Payment extends Base {
   order_id: string;

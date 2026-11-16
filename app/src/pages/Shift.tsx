@@ -3,8 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../lib/db';
 import { shiftSummary } from '../lib/calc';
 import { fmtShort, rp } from '../lib/format';
-import { activeShift, addCashMove, getDeviceConfig, newId, save } from '../lib/store';
-import { getSession } from '../lib/session';
+import { activeShift, addCashMove, openShift, save } from '../lib/store';
 import { Empty, Field, MoneyInput, Seg, toast } from '../components/ui';
 import type { Shift } from '../lib/types';
 
@@ -21,9 +20,7 @@ export default function ShiftPage() {
   const cats = settings?.expense_categories || [];
 
   async function open() {
-    const s = getSession();
-    const cfg = await getDeviceConfig();
-    await save<Shift>('shifts', newId('s'), { outlet_id: cfg.outletId, device_id: s.deviceId, user_id: s.user!.id, user_name: s.user!.name, opened_at: new Date().toISOString(), opening_cash: opening, closed_at: null });
+    await openShift(opening);
     toast('Shift dibuka');
   }
   async function close(sh: Shift) {

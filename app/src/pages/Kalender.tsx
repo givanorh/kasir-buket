@@ -4,7 +4,7 @@ import { db } from '../lib/db';
 import { useSyncStatus } from '../lib/sync';
 import { saveMany, save, newId } from '../lib/store';
 import { rp } from '../lib/format';
-import { DEFAULT_EVENTS_2026, KIND_LABEL, baselineAround, covers, dailySales, eventStat, localDay, shiftDay, spikeDays, type Daily, type EventStat } from '../lib/events';
+import { DEFAULT_EVENTS_2026, KIND_LABEL, baselineAround, covers, dailySales, eventStat, localDay, occurrences, shiftDay, spikeDays, suggestRecurring, type Daily, type EventStat } from '../lib/events';
 import { Badge, Empty, Field, Modal, Seg, toast } from '../components/ui';
 import { Icon } from '../components/icons';
 import type { CalEvent, EventKind } from '../lib/types';
@@ -36,6 +36,7 @@ export default function Kalender() {
   const [year, setYear] = useState(new Date().getFullYear());
   const [kind, setKind] = useState<EventKind | ''>('');
   const [edit, setEdit] = useState<Partial<CalEvent> | null>(null);
+  const [formTitle, setFormTitle] = useState('');
   const dl = useMemo(() => dailySales(orders), [orders]);
 
   // isi event bawaan 2026 sekali, setelah sinkron selesai (agar tidak menimpa event yang sudah ada di server)
@@ -48,16 +49,21 @@ export default function Kalender() {
 
   if (!events) return null;
   const live = events.filter((e) => !e.deleted);
-  const ofYear = live.filter((e) => e.date.startsWith(String(year)) || (e.end || '').startsWith(String(year))).sort((a, b) => a.date.localeCompare(b.date));
+  const ofYear = occurrences(live, year);
+  const baseOf = (id: string) => live.find((x) => x.id === id)!;
   const shown = ofYear.filter((e) => !kind || e.kind === kind);
   const today = localDay(new Date());
-  const soon = live.filter((e) => (e.end || e.date) >= today && e.date <= shiftDay(today, 45)).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 4);
-  const spikes = spikeDays(dl, year).filter((s) => !live.some((e) => covers(e, s.day, 1)));
+  const thisYear = Number(today.slice(0, 4));
+  const soon = [...occurrences(live, thisYear), ...occurrences(live, thisYear + 1)]
+    .filter((e) => (e.end || e.date) >= today && e.date <= shiftDay(today, 45))
+    .filter((e, i, a) => a.findIndex((x) => x.baseId === e.baseId && x.date === e.date) === i)
+    .sort((a, b) => a.date.localeCompare(b.date)).slice(0, 4);
+  const spikes = spikeDays(dl, year).filter((s) => !ofYear.some((e) => covers(e, s.day, 1)));
   const missingDefaults = DEFAULT_EVENTS_2026.filter((d) => !events.some((e) => e.id === d.id));
   const years = [...new Set([new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1, ...live.map((e) => Number(e.date.slice(0, 4)))])].sort();
 
   async function copyNextYear() {
-    const fixed = ofYear.filter((e) => e.kind === 'momen' || e.kind === 'lokal' || e.kind === 'toko');
+    const fixed = ofYear.filter((e) => !e.recurring && (e.kind === 'momen' || e.kind === 'lokal' || e.kind === 'toko'));
     const ny = (k?: string) => (k ? `${Number(k.slice(0, 4)) + 1}${k.slice(4)}` : undefined);
     const exists = new Set(live.filter((e) => e.date.startsWith(String(year + 1))).map((e) => e.name));
     const add = fixed.filter((e) => !exists.has(e.name));
@@ -86,7 +92,7 @@ export default function Kalender() {
             const days = Math.round((new Date(e.date + 'T12:00:00').getTime() - new Date(today + 'T12:00:00').getTime()) / 86400e3);
             const last = e.kind === 'momen' || e.kind === 'lokal' ? eventStat({ date: minusYear(e.date)!, end: minusYear(e.end) }, dl) : null;
             return (
-              <button key={e.id} className="soon-card" onClick={() => setEdit(e)}>
+              <button key={e.baseId + e.date} className="soon-card" onClick={() => setEdit(baseOf(e.baseId))}>
                 <span className="soon-when">{days > 0 ? `${days} hari lagi` : days === 0 ? 'Hari ini' : 'Sedang berlangsung'}</span>
                 <b>{e.name}</b>
                 <span className="muted">{range(e)}</span>
@@ -99,7 +105,7 @@ export default function Kalender() {
 
       <section className="card">
         <h3>Omzet harian {year} dibanding median sekitarnya</h3>
-        <Heatmap year={year} dl={dl} events={live} />
+        <Heatmap year={year} dl={dl} events={ofYear} />
       </section>
 
       {spikes.length > 0 && (
@@ -111,7 +117,7 @@ export default function Kalender() {
               <div key={s.day} className="spk-row">
                 <span><b>{dShort(s.day)}</b> <span className="muted">{s.day.slice(0, 4)}</span></span>
                 <span>{jt(s.sales)} · {s.count} trx · <b>{x1(s.ratio)}</b></span>
-                <button className="btn small" onClick={() => setEdit({ date: s.day, kind: 'data', name: '', note: `Omzet ${jt(s.sales)}, ${s.count} transaksi, ${x1(s.ratio)} median sekitarnya.` })}>Jadikan event</button>
+                <button className="btn small" onClick={() => { const sg = suggestRecurring({ date: s.day, name: '' }); setEdit({ date: s.day, kind: sg.day ? 'momen' : 'data', recurring: !!sg.day, name: sg.name, note: `Omzet ${jt(s.sales)}, ${s.count} transaksi, ${x1(s.ratio)} median sekitarnya.` }); }}>Jadikan event</button>
               </div>
             ))}
           </div>
@@ -128,14 +134,22 @@ export default function Kalender() {
               const s = eventStat(e, dl);
               const last = !s.covered && (e.kind === 'momen' || e.kind === 'lokal') ? eventStat({ date: minusYear(e.date)!, end: minusYear(e.end) }, dl) : null;
               return (
-                <div key={e.id} className="ev" data-testid="event-row">
+                <div key={e.baseId + e.date} className="ev" data-testid="event-row">
                   <div className="ev-date">{range(e)}</div>
                   <div className="ev-main">
-                    <div><b>{e.name}</b> <Badge tone={TONE[e.kind]}>{KIND_LABEL[e.kind]}</Badge></div>
+                    <div><b>{e.name}</b> <Badge tone={TONE[e.kind]}>{KIND_LABEL[e.kind]}</Badge>{e.recurring && <span className="rutin" title="Berulang setiap tahun"><Icon name="repeat" size={14} />rutin</span>}</div>
                     {s.covered ? <div className="ev-stat">{statText(s)}</div> : last?.covered ? <div className="ev-stat muted">Tahun lalu: {statText(last)}</div> : null}
                     {e.note && <div className="muted small">{e.note}</div>}
                   </div>
-                  <button className="icon-btn" onClick={() => setEdit(e)} aria-label={`Ubah ${e.name}`}><Icon name="pengaturan" size={18} /></button>
+                  <div className="ev-act">
+                    {e.kind === 'data' && <button className="btn small" data-testid="jadikan-rutin" onClick={() => {
+                      const b = baseOf(e.baseId); const sg = suggestRecurring(b);
+                      const data = (b.note || '').replace(/(Kemungkinan|Ganti nama|Cek apakah|Tidak terjadi)[^.]*\.\s*/g, '').trim();
+                      setEdit({ ...b, name: sg.name, kind: 'momen', recurring: true, note: `${sg.day ? `${sg.name.replace(/ \(.*/, '')} diperingati setiap ${Number(sg.day.slice(8))} ${BLN[Number(sg.day.slice(5, 7)) - 1]}. ` : ''}${data}`.trim() });
+                      setFormTitle('Jadikan event rutin');
+                    }}><Icon name="repeat" size={16} />Jadikan event rutin</button>}
+                    <button className="icon-btn" onClick={() => setEdit(baseOf(e.baseId))} aria-label={`Ubah ${e.name}`}><Icon name="pengaturan" size={18} /></button>
+                  </div>
                 </div>
               );
             })}
@@ -143,7 +157,7 @@ export default function Kalender() {
         );
       })}
       {!shown.length && <Empty>Belum ada event untuk {year}.</Empty>}
-      {edit && <EventForm e={edit} onClose={() => setEdit(null)} />}
+      {edit && <EventForm e={edit} title={formTitle} onClose={() => { setEdit(null); setFormTitle(''); }} />}
     </div>
   );
 }
@@ -199,17 +213,17 @@ function Heatmap({ year, dl, events }: { year: number; dl: Daily; events: CalEve
   );
 }
 
-function EventForm({ e, onClose }: { e: Partial<CalEvent>; onClose: () => void }) {
+function EventForm({ e, title, onClose }: { e: Partial<CalEvent>; title?: string; onClose: () => void }) {
   const [f, setF] = useState<Partial<CalEvent>>(e);
   const valid = !!f.name?.trim() && !!f.date && (!f.end || f.end >= f.date);
   async function submit() {
     const { id, created_at, updated_at, ...p } = f as CalEvent;
-    await save<CalEvent>('events', id || newId('ev'), { ...p, name: f.name!.trim(), end: f.end && f.end !== f.date ? f.end : undefined, kind: f.kind || 'toko' });
+    await save<CalEvent>('events', id || newId('ev'), { ...p, name: f.name!.trim(), end: f.end && f.end !== f.date ? f.end : undefined, kind: f.kind || 'toko', recurring: !!f.recurring });
     toast('Event disimpan');
     onClose();
   }
   return (
-    <Modal title={e.id ? 'Ubah event' : 'Event baru'} onClose={onClose}
+    <Modal title={title || (e.id ? 'Ubah event' : 'Event baru')} onClose={onClose}
       footer={<>
         {e.id && <button className="btn danger" onClick={async () => { if (confirm(`Hapus event "${e.name}"?`)) { await save<CalEvent>('events', e.id!, { deleted: true }); onClose(); } }}>Hapus</button>}
         <button className="btn primary grow" disabled={!valid} onClick={submit} data-testid="simpan-event">Simpan</button>
@@ -221,6 +235,7 @@ function EventForm({ e, onClose }: { e: Partial<CalEvent>; onClose: () => void }
           <Field label="Sampai (opsional)"><input type="date" value={f.end || ''} min={f.date} onChange={(x) => setF({ ...f, end: x.target.value })} /></Field>
         </div>
         <Field group label="Jenis"><Seg value={(f.kind || 'toko') as EventKind} onChange={(kind) => setF({ ...f, kind })} options={(Object.keys(KIND_LABEL) as EventKind[]).map((k) => ({ value: k, label: KIND_LABEL[k] }))} /></Field>
+        <label className="check"><input type="checkbox" checked={!!f.recurring} onChange={(x) => setF({ ...f, recurring: x.target.checked })} data-testid="event-rutin" />Event rutin: muncul otomatis setiap tahun pada tanggal yang sama</label>
         <Field label="Catatan" hint="Mis. produk yang laku, stok yang perlu disiapkan, jumlah perangkai"><textarea rows={4} value={f.note || ''} onChange={(x) => setF({ ...f, note: x.target.value })} /></Field>
       </div>
     </Modal>

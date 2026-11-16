@@ -4,26 +4,32 @@ import qrcode from 'qrcode-generator';
 import { db, getMeta, setMeta } from '../lib/db';
 import { cartTotals, pointsEarned, scheduledQtyOn } from '../lib/calc';
 import { addDays, dayKey, fmtDate, fromLocalInput, memberNo, num, rp, toLocalInput } from '../lib/format';
-import { activeShift, checkout, getDeviceConfig, stockLevels, type CheckoutInput, type DeviceConfig } from '../lib/store';
+import { activeShift, checkout, getDeviceConfig, openShift, stockLevels, type CheckoutInput, type DeviceConfig } from '../lib/store';
 import { printOrder, type PrintResult } from '../lib/print';
 import { buildStruk, buildTiket } from '../lib/print/receipts';
 import { pickSurvey, storeCfg } from '../lib/settings';
-import { api } from '../lib/session';
+import { budgetLeft, monthKey, monthStartIso, reviewTiers, reviewUsage, tierOffer } from '../lib/review';
+import { api, useSession } from '../lib/session';
 import { deliveryFee, isShortMapsLink, parseLocalInput, type LatLng } from '../lib/geo';
-import { Field, Modal, MoneyInput, Seg, toast } from '../components/ui';
+import { Badge, Field, Modal, MoneyInput, Seg, toast } from '../components/ui';
 import { Icon } from '../components/icons';
 import { ReceiptPreview } from '../components/ReceiptPreview';
 import type { Fulfillment, Order, OrderItem, Product } from '../lib/types';
 
 const TINTS = ['#f3dfe6', '#e3ece5', '#efe6dc', '#e2e6f1', '#ece3f0', '#f2ecd8'];
 
-export interface EngageResult { reviewDiscount: number; survey: Record<string, string> }
+export interface EngageResult { reviewDiscount: number; reviewTier?: string; survey: Record<string, string> }
 
 export default function Kasir() {
   const products = useLiveQuery(() => db.products.toArray(), []) || [];
   const categories = useLiveQuery(() => db.categories.toArray(), []) || [];
   const stock = useLiveQuery(() => stockLevels(), []) || new Map<string, number>();
-  const shift = useLiveQuery(() => activeShift(), []);
+  const shift = useLiveQuery(async () => (await activeShift()) ?? null, []); // undefined = memuat, null = belum dibuka
+  const role = useSession().user?.role;
+  const [opening, setOpening] = useState(0);
+  // animasi masuk berurutan hanya saat halaman pertama dibuka, bukan setiap kali mencari/memfilter
+  const [enter, setEnter] = useState(true);
+  useEffect(() => { if (!products.length) return; const t = setTimeout(() => setEnter(false), 1000); return () => clearTimeout(t); }, [products.length > 0]); // eslint-disable-line
   const settings = useLiveQuery(() => db.settings.get('toko'));
   const [q, setQ] = useState('');
   const [cat, setCat] = useState('');
@@ -76,8 +82,17 @@ export default function Kasir() {
   }
 
   return (
+    shift === null && role !== 'owner' ? (
+      <div className="gate" data-testid="shift-gate">
+        <div className="gate-mark"><Icon name="shift" size={28} /></div>
+        <h2>Buka shift untuk mulai berjualan</h2>
+        <p className="muted">Kasir hanya bisa dipakai setelah shift dibuka, agar uang di laci bisa direkap saat tutup shift. Owner tetap bisa berjualan tanpa shift.</p>
+        <Field label="Kas awal di laci"><MoneyInput value={opening} onChange={setOpening} ariaLabel="Kas awal" /></Field>
+        <button className="btn primary big" onClick={async () => { await openShift(opening); toast('Shift dibuka. Selamat berjualan'); }} data-testid="gate-buka-shift">Buka shift</button>
+      </div>
+    ) : (
     <div className="pos">
-      {!shift && <div className="note warn">Shift belum dibuka. Transaksi tetap bisa, tetapi rekap kas laci lebih akurat bila shift dibuka di menu <a href="#/shift">Shift</a>.</div>}
+      {shift === null && <div className="note warn">Shift belum dibuka (akun owner tetap bisa berjualan). Rekap kas laci lebih akurat bila shift dibuka di menu <a href="#/shift">Shift</a>.</div>}
       <div className="pos-search">
         <div className="search"><Icon name="search" /><input placeholder="Cari buket atau kode" value={q} onChange={(e) => setQ(e.target.value)} /></div>
         <button className="btn" onClick={() => setCustom(true)}><Icon name="plus" size={18} />Item custom</button>
@@ -88,14 +103,14 @@ export default function Kasir() {
           <button key={c.id} className={cat === c.id ? 'on' : ''} onClick={() => setCat(c.id)}>{c.name}</button>
         ))}
       </div>
-      <div className="grid">
+      <div className={`grid ${enter ? 'enter' : ''}`}>
         {list.map((p, i) => {
           const st = p.track_stock ? stock.get(p.id) || 0 : null;
           const n = inCart.get(p.id) || 0;
           return (
-            <div key={p.id} className={`pwrap ${n ? 'in' : ''}`} data-testid="product-card">
+            <div key={p.id} className={`pwrap ${n ? 'in' : ''}`} style={{ ['--i' as string]: i }} data-testid="product-card">
               <button className="pcard" onClick={() => add(p)} disabled={st !== null && st <= 0}>
-                <div className="pimg" style={{ background: p.photo ? `center/cover url(${p.photo})` : TINTS[i % TINTS.length] }}>{!p.photo && p.name.slice(0, 1)}</div>
+                <div className={`pimg ${p.photo ? '' : 'ph'}`} style={p.photo ? { background: `center/cover url(${p.photo})` } : { backgroundColor: TINTS[i % TINTS.length] }}>{!p.photo && p.name.slice(0, 1).toUpperCase()}</div>
                 <div className="pinfo">
                   <span className="pname">{p.name}</span>
                   <span className="pprice">{rp(p.price)}</span>
@@ -160,13 +175,14 @@ export default function Kasir() {
         <ItemEditor isNew item={{ name: 'Buket custom', qty: 1, price: 0, cost: 0, discount: 0, type: 'buket' }} onClose={() => setCustom(false)}
           onSave={(it) => { setCart((c) => [...c, it]); setCustom(false); }} />
       )}
-      {engage && <EngageModal onClose={(r) => { setEngage(false); setPay(r); }} />}
+      {engage && <EngageModal base={cartTotals(cart).subtotal - cartTotals(cart).item_discount} onClose={(r) => { setEngage(false); setPay(r); }} />}
       {pay && (
         <Checkout items={cart} engage={pay} onClose={() => setPay(null)}
           onDone={(order, results) => { setPay(null); setCart([]); setDone({ order, results }); }} />
       )}
       {done && <Success order={done.order} results={done.results} onClose={() => setDone(null)} />}
     </div>
+    )
   );
 }
 
@@ -194,16 +210,26 @@ function ItemEditor({ item, isNew, onSave, onClose, onRemove }: { item: OrderIte
   );
 }
 
-/** Pop-up sesekali: tawarkan diskon ulasan Google Maps dan 1–2 pertanyaan survei yang diacak dari bank pertanyaan. */
-function EngageModal({ onClose }: { onClose: (r: EngageResult) => void }) {
+/**
+ * Pop-up sesekali: tawarkan diskon ulasan Google Maps dan 1–2 pertanyaan survei yang diacak dari bank pertanyaan.
+ * Kolom diskon, belanja minimal, dan budget per bulan diatur owner (Pengaturan › Promo poin & ongkir).
+ */
+function EngageModal({ base, onClose }: { base: number; onClose: (r: EngageResult) => void }) {
   const settings = useLiveQuery(() => db.settings.get('toko'));
   const cfg = storeCfg(settings).engage;
-  const [disc, setDisc] = useState(0);
+  const [sel, setSel] = useState<{ id: string; label: string; amount: number } | null>(null);
   const [ans, setAns] = useState<Record<string, string>>({});
   // diacak sekali saat pengaturan selesai dimuat, agar pertanyaan tidak berganti ketika kasir memilih jawaban
   const [qs, setQs] = useState<ReturnType<typeof pickSurvey> | null>(null);
   useEffect(() => { if (settings && !qs) setQs(pickSurvey(cfg.survey, Math.max(1, Math.min(2, cfg.per_popup || 2)))); }, [settings]); // eslint-disable-line
-  const steps = [cfg.review_discount_min, Math.round((cfg.review_discount_min + cfg.review_discount_max) / 2 / 500) * 500, cfg.review_discount_max].filter((v, i, a) => v > 0 && a.indexOf(v) === i);
+  // pemakaian budget bulan berjalan dari seluruh perangkat yang sudah tersinkron
+  const monthOrders = useLiveQuery(() => db.orders.where('created_at').aboveOrEqual(monthStartIso()).toArray(), []) || [];
+  const now = new Date();
+  const usage = reviewUsage(monthOrders, monthKey(now));
+  const budget = cfg.review_budget || 0;
+  const left = budgetLeft(budget, usage.used);
+  const tiers = reviewTiers(cfg).filter((t) => t.active !== false);
+  const monthName = now.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
   const qrSvg = useMemo(() => {
     if (!cfg.review_url) return '';
     const qr = qrcode(0, 'M');
@@ -212,7 +238,7 @@ function EngageModal({ onClose }: { onClose: (r: EngageResult) => void }) {
     return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
   }, [cfg.review_url]);
   const clean = () => Object.fromEntries(Object.entries(ans).filter(([, v]) => v));
-  const finish = () => onClose({ reviewDiscount: disc, survey: clean() });
+  const finish = () => onClose({ reviewDiscount: sel?.amount || 0, reviewTier: sel?.label, survey: clean() });
   return (
     <Modal title="Sebelum bayar" onClose={() => onClose({ reviewDiscount: 0, survey: clean() })} wide
       footer={<>
@@ -227,11 +253,30 @@ function EngageModal({ onClose }: { onClose: (r: EngageResult) => void }) {
         <div className="stack">
           <div>
             <h3>Ulasan Google Maps</h3>
-            <p className="muted">Tawarkan potongan bila pelanggan sudah mengirim ulasan dan menunjukkannya.</p>
-            <div className="chips">
-              <button className={!disc ? 'on' : ''} onClick={() => setDisc(0)}>Tidak ulasan</button>
-              {steps.map((v) => <button key={v} className={disc === v ? 'on' : ''} onClick={() => setDisc(v)}>Diskon {rp(v)}</button>)}
+            <p className="muted">Pilih diskon sesuai ulasan yang sudah dikirim dan ditunjukkan pelanggan.</p>
+            {budget > 0 && (
+              <div className="rbudget" data-testid="review-budget">
+                <div className="row"><span>Sisa budget {monthName}</span><b>{rp(left)} <span className="muted">dari {rp(budget)}</span></b></div>
+                <div className="meter"><i style={{ width: `${Math.min(100, (usage.used / budget) * 100)}%` }} /></div>
+                <div className="muted small">Terpakai {rp(usage.used)} untuk {num(usage.count)} transaksi</div>
+              </div>
+            )}
+            {base < (cfg.review_min_spend || 0) && <div className="note" data-testid="review-min">Belanja {rp(base)} di bawah minimal {rp(cfg.review_min_spend)}: diskon ulasan tidak berlaku.</div>}
+            {budget > 0 && left <= 0 && <div className="note warn" data-testid="review-habis">Budget diskon ulasan {monthName} sudah habis.</div>}
+            <div className="tiers">
+              <button className={!sel ? 'on' : ''} onClick={() => setSel(null)}>Tidak ulasan</button>
+              {tiers.map((t) => {
+                const o = tierOffer(t, base, left, cfg.review_min_spend || 0);
+                return (
+                  <button key={t.id} className={sel?.id === t.id ? 'on' : ''} disabled={!!o.block} data-testid={`tier-${t.id}`}
+                    onClick={() => setSel({ id: t.id, label: t.label, amount: o.amount })} title={o.block === 'budget' ? 'Melebihi sisa budget bulan ini' : undefined}>
+                    <span>{t.label}</span><b>−{rp(o.amount)}</b>
+                    {o.block && <i>{o.block === 'budget' ? 'melebihi sisa budget' : o.block === 'belanja' ? 'di bawah belanja minimal' : 'tidak aktif'}</i>}
+                  </button>
+                );
+              })}
             </div>
+            {!tiers.length && <div className="muted small">Owner belum mengatur kolom diskon ulasan.</div>}
           </div>
           {(qs || []).map((s) => (
             <div key={s.id} data-testid="survey-q">
@@ -270,6 +315,13 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
   const cust = customers.find((c) => c.id === f.customerId) || (mn ? customers.find((c) => !c.deleted && memberNo(c.phone) === mn) : undefined);
   const custMn = memberNo(cust?.phone) || mn;
   const isMember = !!cust?.member || (f.register && !!custMn);
+  // nomor HP diisi lebih dulu: bila cocok dengan pelanggan tersimpan, data lainnya terisi otomatis
+  const [filledFor, setFilledFor] = useState('');
+  useEffect(() => {
+    if (!cust || cust.id === filledFor) return;
+    setFilledFor(cust.id);
+    setF((x) => ({ ...x, customerId: cust.id, name: cust.name, address: x.address || cust.address || '', recipient: x.recipient, register: false }));
+  }, [cust?.id]); // eslint-disable-line
   const custOrders = useLiveQuery(() => (cust ? db.orders.where('customer_id').equals(cust.id).toArray() : Promise.resolve([] as Order[])), [cust?.id]) || [];
   const balance = custOrders.filter((o) => !o.void).reduce((s, o) => s + (o.points_earned || 0) - (o.points_redeemed || 0), 0);
 
@@ -290,8 +342,8 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
   const scheduled = dueIso ? scheduledQtyOn(orders, dayKey(dueIso), dayKey) : 0;
   const newQty = items.filter((i) => (i.type || 'buket') === 'buket').reduce((s, i) => s + i.qty, 0);
   const sugg = [...new Set([payAmount, Math.ceil(payAmount / 50000) * 50000, Math.ceil(payAmount / 100000) * 100000, payAmount + 50000].filter((x) => x >= payAmount && x > 0))].slice(0, 4);
-  const matches = (f.phone.length >= 3 || f.name.length >= 2) && !f.customerId
-    ? customers.filter((c) => (f.phone && (c.phone || '').includes(f.phone.replace(/\D/g, ''))) || (f.name && c.name.toLowerCase().includes(f.name.toLowerCase()))).slice(0, 4)
+  const matches = f.name.trim().length >= 2 && !cust
+    ? customers.filter((c) => !c.deleted && c.name.toLowerCase().includes(f.name.trim().toLowerCase())).slice(0, 4)
     : [];
   const needCustomer = f.payType !== 'lunas' || f.fulfillment !== 'sekarang';
   const invalid = (needCustomer && !f.name.trim()) || (f.fulfillment !== 'sekarang' && !dueIso) || (f.payType === 'dp' && (f.dp <= 0 || f.dp >= t.total)) || shortCash;
@@ -339,7 +391,7 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
         customer: { id: cust?.id || null, name: f.name, phone: f.phone || cust?.phone || '', registerMember: f.register && !cust?.member }, fulfillment: f.fulfillment, dueAt: dueIso,
         recipientName: f.recipient, recipientPhone: f.recipientPhone, deliveryAddress: f.address,
         cardMessage: f.card, notes: f.notes, payMethod: f.method, payAmount, cashReceived: f.received || payAmount,
-        florist: f.florist, manualDiscount: f.disc, reviewDiscount: engage.reviewDiscount, survey: engage.survey,
+        florist: f.florist, manualDiscount: f.disc, reviewDiscount: engage.reviewDiscount, reviewTier: engage.reviewTier, survey: engage.survey,
         pointsRedeemed: redeem, pointsDiscount: pointsDisc, pointsEarned: earn,
         delivery: f.fulfillment === 'antar' && geo ? { input: f.mapsInput, lat: geo.point?.lat ?? 0, lng: geo.point?.lng ?? 0, km: geo.km, km_source: geo.source, rate: cfg.delivery.rate, min: cfg.delivery.min } : null,
       };
@@ -361,12 +413,23 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
       <div className="checkout">
         <div className="stack">
           <div className="section-title">Pelanggan</div>
-          <div className="cols">
-            <Field label={`Nama${needCustomer ? ' (wajib)' : ''}`}><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value, customerId: '' })} data-testid="cust-name" /></Field>
-            <Field label="Nomor HP/WA"><input inputMode="tel" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value, customerId: '' })} /></Field>
-          </div>
-          {matches.length > 0 && (
-            <div className="chips small">{matches.map((c) => <button key={c.id} onClick={() => setF({ ...f, customerId: c.id, name: c.name, phone: c.phone || '', address: f.address || c.address || '' })}>{c.name} {c.phone}</button>)}</div>
+          <Field label="Nomor HP" hint={cust ? undefined : mn ? 'Nomor belum tersimpan: transaksi tetap bisa dilanjutkan. Centang Daftarkan member bila pelanggan setuju.' : 'Opsional. Bila nomor sudah tersimpan, data pelanggan terisi otomatis. Tanpa nomor tetap bisa bertransaksi.'}>
+            <div className={`lookup ${cust ? 'found' : ''}`}>
+              <input inputMode="tel" autoFocus value={f.phone} placeholder="08…" data-testid="cust-phone" aria-label="Nomor HP"
+                onChange={(e) => { const v = e.target.value; setF((x) => ({ ...x, phone: v, customerId: memberNo(v) && memberNo(v) === memberNo(cust?.phone) ? x.customerId : '' })); }} />
+              {cust && <span className="lookup-ok" aria-hidden="true"><Icon name="check" size={18} /></span>}
+            </div>
+          </Field>
+          {cust && (
+            <div className="found-card" data-testid="cust-found">
+              <span className="avatar">{cust.name.replace(/[^\p{L}\s]/gu, '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase()}</span>
+              <div className="grow"><b>{cust.name}</b>{cust.member ? <Badge tone="rose">member</Badge> : <Badge>bukan member</Badge>}
+                <div className="muted">{[cust.address, cust.instagram && `IG ${cust.instagram}`, `${custOrders.filter((o) => !o.void).length} transaksi`].filter(Boolean).join(' · ')}</div></div>
+            </div>
+          )}
+          <Field label={`Nama${needCustomer ? ' (wajib)' : ''}`}><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} data-testid="cust-name" /></Field>
+          {!cust && matches.length > 0 && (
+            <div className="chips small"><span className="muted small">Pelanggan lama?</span>{matches.map((c) => <button key={c.id} onClick={() => setF({ ...f, customerId: c.id, phone: c.phone || f.phone })}>{c.name} {c.phone}</button>)}</div>
           )}
           {L.enabled && cust?.member && (
             <div className="loyal" data-testid="member">
@@ -433,7 +496,7 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
             {items.map((it, i) => <div key={i} className="row muted"><span>{it.qty}× {it.name}</span><span>{num(it.qty * it.price - it.discount)}</span></div>)}
             <div className="row"><span>Subtotal</span><span>{rp(t.subtotal - t.item_discount)}</span></div>
             <div className="row"><span>Diskon</span><MoneyInput value={f.disc} onChange={(disc) => setF({ ...f, disc })} ariaLabel="Diskon transaksi" /></div>
-            {engage.reviewDiscount > 0 && <div className="row"><span>Diskon ulasan Google Maps</span><span>−{rp(engage.reviewDiscount)}</span></div>}
+            {engage.reviewDiscount > 0 && <div className="row"><span>Diskon ulasan{engage.reviewTier ? ` (${engage.reviewTier})` : ' Google Maps'}</span><span>−{rp(engage.reviewDiscount)}</span></div>}
             {pointsDisc > 0 && <div className="row"><span>Tukar {num(redeem)} poin</span><span>−{rp(pointsDisc)}</span></div>}
             {fee > 0 && <div className="row"><span>Ongkir</span><span>{rp(fee)}</span></div>}
             <div className="row total"><span>Total</span><span data-testid="total">{rp(t.total)}</span></div>

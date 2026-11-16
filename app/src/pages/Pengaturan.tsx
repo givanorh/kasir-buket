@@ -7,14 +7,15 @@ import { getDeviceConfig, newId, save, setDeviceConfig, type DeviceConfig, type 
 import { sendToPrinter, ThermalPrinter } from '../lib/print';
 import { buildTest } from '../lib/print/receipts';
 import { planImport, runImport, type ImportPlan } from '../lib/kasirpintar';
-import { Badge, Empty, Field, Modal, MoneyInput, Seg, toast } from '../components/ui';
+import { Badge, Empty, Field, Modal, MoneyInput, Seg, TabPanel, toast } from '../components/ui';
 import { Icon } from '../components/icons';
 import { DEFAULT_SURVEY, answerOf, storeCfg } from '../lib/settings';
+import { REVIEW_ACCEPT_RATE, budgetLeft, budgetSuggestion, monthKey, monthStartIso, reviewTiers, reviewUsage, tierAmount } from '../lib/review';
 import { parseLocalInput } from '../lib/geo';
 import { num, rp } from '../lib/format';
 import { FN_OPTIONS, KIND_OPTIONS, codeMeaning, guessKind, sampleNo, splitCode, type DeviceFn, type DeviceKind } from '../lib/device';
 import { ROLE_LABEL } from '../lib/labels';
-import type { EngageCfg, Outlet, PrintTarget, Role, Settings, SurveyQuestion } from '../lib/types';
+import type { EngageCfg, Outlet, PrintTarget, ReviewTier, Role, Settings, SurveyQuestion } from '../lib/types';
 import { fmtShort } from '../lib/format';
 
 export default function Pengaturan() {
@@ -33,6 +34,7 @@ export default function Pengaturan() {
   return (
     <div className="page">
       <div className="toolbar"><Seg value={tab} onChange={setTab} options={tabs} /></div>
+      <TabPanel k={tab} order={tabs.map((t) => t.value)}>
       {tab === 'perangkat' && <DeviceTab />}
       {tab === 'printer' && <PrinterTab />}
       {tab === 'toko' && owner && <StoreTab />}
@@ -42,6 +44,7 @@ export default function Pengaturan() {
       {tab === 'survei' && owner && <SurveyTab />}
       {tab === 'email' && owner && <EmailTab />}
       {tab === 'impor' && owner && <ImportTab />}
+      </TabPanel>
     </div>
   );
 }
@@ -249,6 +252,89 @@ function OutletRow({ o }: { o: Outlet }) {
   );
 }
 
+/**
+ * Diskon ulasan Google Maps (owner): budget per bulan, belanja minimal, dan kolom diskon yang bisa ditambah/dihapus.
+ * Nilai tersimpan bersama tombol "Simpan pengaturan" di tab ini.
+ */
+function ReviewDiscountCard({ E, setE }: { E: EngageCfg; setE: (p: Partial<EngageCfg>) => void }) {
+  const now = new Date();
+  const monthOrders = useLiveQuery(() => db.orders.where('created_at').aboveOrEqual(monthStartIso()).toArray(), []) || [];
+  const yearOrders = useLiveQuery(() => db.orders.where('created_at').aboveOrEqual(new Date(now.getFullYear(), now.getMonth() - 12, 1).toISOString()).toArray(), []);
+  const tiers = reviewTiers(E);
+  const setTiers = (review_tiers: ReviewTier[]) => setE({ review_tiers });
+  const upd = (id: string, p: Partial<ReviewTier>) => setTiers(tiers.map((t) => (t.id === id ? { ...t, ...p } : t)));
+  const usage = reviewUsage(monthOrders, monthKey(now));
+  const budget = E.review_budget || 0;
+  const left = budgetLeft(budget, usage.used);
+  const sug = useMemo(() => (yearOrders ? budgetSuggestion(yearOrders, now, E.every_n, tiers) : null), [yearOrders, E.every_n, tiers]); // eslint-disable-line
+  const active = tiers.filter((t) => t.active !== false && t.value > 0);
+  const avgFix = active.length ? active.reduce((s, t) => s + tierAmount(t, sug?.avgBasket || 150000), 0) / active.length : 0;
+  const monthName = now.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+  const f1 = (n: number) => n.toLocaleString('id-ID', { maximumFractionDigits: 1 });
+  return (
+    <section className="card" data-testid="review-card">
+      <h3>Diskon ulasan Google Maps</h3>
+      <div className="rv-top">
+        <Field label="Budget per bulan" hint="Rp 0 = tanpa batas. Pop-up menonaktifkan kolom yang melebihi sisa budget.">
+          <MoneyInput value={budget} onChange={(review_budget) => setE({ review_budget })} ariaLabel="Budget diskon ulasan per bulan" />
+        </Field>
+        <Field label="Belanja minimal" hint="Subtotal setelah potongan item. Di bawah nilai ini diskon ulasan tidak ditawarkan.">
+          <MoneyInput value={E.review_min_spend || 0} onChange={(review_min_spend) => setE({ review_min_spend })} ariaLabel="Belanja minimal diskon ulasan" />
+        </Field>
+        <div className="rbudget" data-testid="review-usage">
+          <div className="row"><span>Terpakai {monthName}</span><b>{rp(usage.used)}</b></div>
+          {budget > 0 && <div className="meter"><i style={{ width: `${Math.min(100, (usage.used / budget) * 100)}%` }} /></div>}
+          <div className="muted small">{num(usage.count)} transaksi{budget > 0 ? ` · sisa ${rp(left)} (${f1(budget ? (left / budget) * 100 : 0)}%)` : ' · tanpa batas budget'}</div>
+        </div>
+      </div>
+
+      <div className="section-title">Kolom diskon</div>
+      <div className="rv-table" role="table" aria-label="Kolom diskon ulasan">
+        <div className="rv-row head" role="row"><span>Aktif</span><span>Nama kolom</span><span>Jenis</span><span>Nilai</span><span>Maks</span><span>Contoh {rp(sug ? Math.round(sug.avgBasket / 1000) * 1000 : 150000)}</span><span /></div>
+        {tiers.map((t) => {
+          const ex = sug ? Math.round(sug.avgBasket / 1000) * 1000 : 150000;
+          return (
+            <div key={t.id} className={`rv-row ${t.active === false ? 'off' : ''}`} role="row" data-testid="tier-row">
+              <label className="check rv-a"><input type="checkbox" checked={t.active !== false} onChange={(e) => upd(t.id, { active: e.target.checked })} aria-label={`Aktif: ${t.label}`} /></label>
+              <input className="rv-n" value={t.label} onChange={(e) => upd(t.id, { label: e.target.value })} aria-label="Nama kolom diskon" placeholder="mis. Ulasan + foto" />
+              <div className="rv-j">
+                <Seg value={t.type} onChange={(type) => upd(t.id, { type, value: type === t.type ? t.value : type === 'persen' ? 5 : 5000, max: type === 'persen' ? t.max || 15000 : undefined })}
+                  options={[{ value: 'rp', label: 'Rp' }, { value: 'persen', label: '%' }]} />
+              </div>
+              <div className="rv-v">
+                {t.type === 'rp'
+                  ? <MoneyInput value={t.value} onChange={(value) => upd(t.id, { value })} ariaLabel={`Nilai ${t.label}`} />
+                  : <div className="money pct"><input type="number" min={0} max={100} step={0.5} value={t.value} onChange={(e) => upd(t.id, { value: Math.max(0, Math.min(100, Number(e.target.value))) })} aria-label={`Persen ${t.label}`} /><span>%</span></div>}
+              </div>
+              <div className={`rv-m ${t.type === 'persen' ? '' : 'none'}`}>
+                {t.type === 'persen' ? <MoneyInput value={t.max || 0} onChange={(max) => upd(t.id, { max })} ariaLabel={`Maksimal ${t.label}`} /> : <span className="muted">–</span>}
+              </div>
+              <span className="rv-ex"><span className="rv-ex-l">Contoh {rp(ex)}: </span>−{rp(tierAmount(t, ex))}</span>
+              <button className="icon-btn rv-x" onClick={() => setTiers(tiers.filter((x) => x.id !== t.id))} aria-label={`Hapus kolom ${t.label}`}><Icon name="close" size={18} /></button>
+            </div>
+          );
+        })}
+      </div>
+      <button className="btn rv-add" onClick={() => setTiers([...tiers, { id: `rt-${Date.now().toString(36)}`, label: `Kolom ${tiers.length + 1}`, type: 'rp', value: 5000 }])} data-testid="tambah-kolom-diskon">
+        <Icon name="plus" size={18} />Tambah kolom diskon
+      </button>
+
+      <div className="calc" data-testid="review-saran">
+        {sug ? (
+          <>
+            <b>Saran budget dari data {sug.months} bulan terakhir</b><br />
+            {num(sug.trx)} transaksi ÷ {sug.months} bulan = {f1(sug.perMonth)} transaksi/bulan<br />
+            {f1(sug.perMonth)} ÷ pop-up tiap {E.every_n} transaksi = {f1(sug.offers)} tawaran/bulan<br />
+            {f1(sug.offers)} × {Math.round(REVIEW_ACCEPT_RATE * 100)}% mau mengulas × rata-rata diskon {rp(Math.round(sug.avgDisc))} = {rp(Math.round(sug.raw))} → dibulatkan ke atas <b>{rp(sug.budget)}</b>/bulan
+            {budget !== sug.budget && sug.budget > 0 && <><br /><button className="linkish small" onClick={() => setE({ review_budget: sug.budget })} data-testid="pakai-saran">Pakai saran {rp(sug.budget)}</button></>}
+          </>
+        ) : yearOrders === undefined ? <>Menghitung saran budget…</> : <>Saran budget muncul setelah ada data transaksi bulan sebelumnya.</>}
+        {budget > 0 && avgFix > 0 && <><br />Budget {rp(budget)} ÷ rata-rata diskon {rp(Math.round(avgFix))} ≈ {num(Math.floor(budget / avgFix))} ulasan per bulan.</>}
+      </div>
+    </section>
+  );
+}
+
 /** Pengaturan khusus owner: poin loyalitas, pop-up ulasan & survei, tarif ongkir, daftar perangkai. */
 function PromoTab() {
   const st = useLiveQuery(() => db.settings.get('toko'));
@@ -290,13 +376,10 @@ function PromoTab() {
           <label className="check"><input type="checkbox" checked={E.enabled} onChange={(e) => setE({ enabled: e.target.checked })} />Tampilkan di layar kasir</label>
           <Field label="Muncul setiap … transaksi (per perangkat)">{numIn(E.every_n, (every_n) => setE({ every_n: Math.max(1, every_n) }), 'Frekuensi pop-up')}</Field>
           <Field label="Link ulasan Google Maps toko" hint="Google Maps › profil toko › Bagikan › salin link, atau link “Minta ulasan” dari Google Business"><input value={E.review_url} onChange={(e) => setE({ review_url: e.target.value.trim() })} placeholder="https://g.page/r/…/review" /></Field>
-          <div className="cols">
-            <Field label="Diskon ulasan minimal"><MoneyInput value={E.review_discount_min} onChange={(review_discount_min) => setE({ review_discount_min })} /></Field>
-            <Field label="Diskon ulasan maksimal"><MoneyInput value={E.review_discount_max} onChange={(review_discount_max) => setE({ review_discount_max })} /></Field>
-          </div>
           <p className="calc">Survei: {storeCfg(st).engage.survey.filter((q) => q.active !== false).length} pertanyaan aktif, {storeCfg(st).engage.per_popup} diacak per pop-up. Atur pertanyaan di tab <b>Survei</b>.</p>
         </section>
       </div>
+      <ReviewDiscountCard E={E} setE={setE} />
       <div className="two">
         <section className="card">
           <h3>Ongkir</h3>

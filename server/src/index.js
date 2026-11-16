@@ -19,7 +19,7 @@ import { expandMapsUrl, roadDistanceKm, orsDistanceKm } from './geo.js';
 import { createNotifier } from './notify.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const VERSION = '1.4.0';
+export const VERSION = '1.5.0';
 
 const ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
 const ROLES = ['owner', 'kasir', 'perangkai'];
