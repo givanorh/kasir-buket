@@ -50,7 +50,7 @@ const wrap64 = (s) => b64(s).replace(/.{1,76}/g, '$&\r\n');
 
 /**
  * Susun pesan MIME. Teks biasa = satu bagian base64. Dengan `calendar`, struktur yang dikenali Gmail/Outlook:
- * multipart/mixed { multipart/alternative { text/plain, text/calendar; method=X }, lampiran undangan.ics }.
+ * multipart/mixed { multipart/alternative { text/plain, text/calendar; method=X }, lampiran tugas.ics (nama bisa diganti lewat calendar.filename) }.
  * @param {{from:string, fromName?:string}} cfg
  * @param {{to:string, subject:string, text:string, calendar?:{method:'REQUEST'|'CANCEL', ics:string}}} msg
  */
@@ -89,8 +89,8 @@ export function buildMessage(cfg, msg) {
     `--${alt}--`,
     '',
     `--${mixed}`,
-    `Content-Type: application/ics; name="undangan.ics"`,
-    `Content-Disposition: attachment; filename="undangan.ics"`,
+    `Content-Type: application/ics; name="${msg.calendar.filename || 'tugas.ics'}"`,
+    `Content-Disposition: attachment; filename="${msg.calendar.filename || 'tugas.ics'}"`,
     'Content-Transfer-Encoding: base64',
     '',
     wrap64(ics),

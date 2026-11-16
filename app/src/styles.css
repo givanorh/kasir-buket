@@ -211,7 +211,7 @@ a { color: var(--plum) }
 /* pengguna & perangkai */
 .ulist, .flist { display: flex; flex-direction: column; container-type: inline-size }
 .formgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px 16px; align-items: start }
-.uhead, .urow { display: grid; grid-template-columns: minmax(0, 1fr) 128px 170px 236px; gap: 12px; align-items: center }
+.uhead, .urow { display: grid; grid-template-columns: minmax(0, 1fr) 128px 170px 340px; gap: 12px; align-items: center }
 .fhead, .frow { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(170px, 1.3fr) 186px; gap: 10px; align-items: center }
 .uhead, .fhead { font-size: 12px; color: var(--ink-2); font-weight: 700; padding-bottom: 6px; border-bottom: 1px solid var(--line-2) }
 .urow, .frow { padding: 10px 0; border-bottom: 1px solid var(--line-2) }
@@ -577,3 +577,73 @@ button.trow:hover, .trow.click:hover { background: #faf9fa }
 .money.pct input { text-align: right }
 .money.pct span { order: 2 }
 .money.pct { padding-right: 12px }
+
+/* v1.6: lihat sandi pengguna */
+.pwshow { display: inline-flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 13px; color: var(--ink-2); animation: pwIn 220ms var(--ease-out) both }
+@keyframes pwIn { from { opacity: 0; transform: translateY(4px) } }
+.pwshow code { background: var(--leaf-soft); color: var(--ink); padding: 2px 8px; border-radius: 6px; font-weight: 700; letter-spacing: .02em; user-select: all }
+
+/* v1.6: filter kategori & urut omzet di Kalender */
+.kfilter { display: flex; flex-wrap: wrap; gap: 6px; align-items: center }
+.kfilter > span { margin-right: 4px; font-weight: 700 }
+.kfilter button { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); background: var(--surface); border-radius: 99px; padding: 6px 12px; min-height: 36px; cursor: pointer; font-weight: 600; font-size: 13.5px; color: var(--ink-2); transition: transform 160ms var(--ease-out), background-color 160ms, border-color 160ms }
+.kfilter button:active { transform: scale(.96) }
+.kfilter button i { width: 8px; height: 8px; border-radius: 50% }
+.kfilter button em { font-style: normal; font-size: 12px; font-weight: 700; color: var(--ink-3); background: var(--line-2); border-radius: 99px; padding: 0 7px; line-height: 18px }
+.kfilter button.on { background: var(--ink); border-color: var(--ink); color: #fff }
+.kfilter button.on em { background: rgba(255, 255, 255, .18); color: #fff }
+.kfilter .k-libur i { background: var(--ink-3) } .kfilter .k-lokal i { background: var(--blue) } .kfilter .k-momen i { background: var(--peony) }
+.kfilter .k-data i { background: var(--red) } .kfilter .k-toko i { background: var(--leaf) }
+.ev.rank { display: grid; grid-template-columns: 34px minmax(0, 1fr) 150px; gap: 14px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line-2) }
+.rank-no { width: 28px; height: 28px; border-radius: 50%; background: var(--peony-soft); color: var(--plum); display: grid; place-items: center; font-weight: 800; font-size: 13px }
+.ev.rank:nth-of-type(-n+3) .rank-no { background: var(--plum); color: #fff }
+.rank-bar { height: 6px; border-radius: 99px; background: var(--line-2); overflow: hidden; margin-top: 4px }
+.rank-bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--peony), var(--plum)); transform-origin: left; animation: meterIn 600ms var(--ease-out) both }
+.rank-val { display: flex; flex-direction: column; align-items: flex-end; text-align: right }
+@media (max-width: 760px) { .ev.rank { grid-template-columns: 30px minmax(0, 1fr); } .rank-val { grid-column: 2; align-items: flex-start; text-align: left } }
+
+/* v1.6: sinkron Google Calendar */
+.gcal-btn { display: inline-flex; align-items: center; gap: 8px }
+.gcal-btn i { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3) }
+.gcal-btn.on i { background: var(--leaf); box-shadow: 0 0 0 3px var(--leaf-soft) }
+.gcal { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 22px; align-items: start }
+.gcal .row { display: flex; justify-content: space-between; gap: 10px; align-items: center }
+.gcal-mail { display: flex; gap: 6px; align-items: center }
+.gcal-mail input { flex: 1 }
+.check.big { align-items: flex-start; gap: 10px }
+.check.big > span { display: grid; gap: 3px }
+.gcal-log { display: grid; gap: 6px; max-height: 220px; overflow: auto }
+@media (max-width: 760px) { .gcal { grid-template-columns: 1fr } }
+
+/* v1.6: Perhitungan HPP › gaji & biaya */
+.ctable { border: 1px solid var(--line-2); border-radius: var(--r-md); overflow: hidden; container-type: inline-size }
+.crow { display: grid; gap: 10px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line-2) }
+.crow:last-child { border-bottom: 0 }
+.crow.staff { grid-template-columns: 40px minmax(110px, 1.2fr) 120px minmax(120px, 1fr) minmax(120px, 1fr) 150px 110px 36px }
+.crow.cost { grid-template-columns: 40px minmax(170px, 1.7fr) 130px minmax(140px, 1fr) minmax(120px, 1fr) 110px 64px 36px }
+.crow.head { background: var(--paper); font-size: 12px; font-weight: 700; color: var(--ink-2) }
+.crow.foot { background: var(--paper); font-size: 14px }
+.crow.off > :not(:first-child):not(:last-child) { opacity: .5 }
+.crow input, .crow select { min-width: 0 }
+.c-name { display: grid; gap: 3px; min-width: 0 }
+.c-name .small { line-height: 1.35 }
+.c-freq { display: grid; gap: 6px; min-width: 0 }
+.c-every { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2) }
+.c-every input { width: 64px }
+.c-num { text-align: right; font-weight: 700; font-size: 13.5px; white-space: nowrap }
+.crow.head > span:nth-child(7), .crow.staff.head > span:nth-child(7) { text-align: right }
+.crow.cost.head > span:nth-child(6) { text-align: right }
+.thr-box { display: grid; grid-template-columns: auto 180px minmax(0, 1fr); gap: 14px; align-items: center; background: var(--paper); border-radius: var(--r-sm); padding: 10px 12px }
+.savebar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; border-radius: var(--r-md) }
+.savebar.on { position: sticky; bottom: 12px; background: rgba(255, 255, 255, .94); backdrop-filter: blur(14px) saturate(1.4); -webkit-backdrop-filter: blur(14px) saturate(1.4); box-shadow: var(--lift); z-index: 5; animation: pwIn 220ms var(--ease-out) both }
+@container (max-width: 860px) {
+  .crow.head { display: none }
+  .crow.staff, .crow.cost { grid-template-columns: 28px minmax(0, 1fr) minmax(0, 1fr) 36px; row-gap: 8px; padding: 12px }
+  .crow.staff > :nth-child(2), .crow.cost > :nth-child(2) { grid-column: 2 / 4 }
+  .crow.staff > :nth-child(8), .crow.cost > :nth-child(8) { grid-column: 4; grid-row: 1 }
+  .crow.staff > :nth-child(n+3):nth-child(-n+7), .crow.cost > :nth-child(n+3):nth-child(-n+7) { grid-column: span 1 }
+  .crow.staff > :nth-child(3), .crow.cost > :nth-child(3) { grid-column: 2 }
+  .crow.foot { grid-template-columns: 28px 1fr 1fr 36px }
+  .c-num { text-align: left }
+}
+@media (max-width: 760px) { .thr-box { grid-template-columns: 1fr } .savebar.on { bottom: 76px } }

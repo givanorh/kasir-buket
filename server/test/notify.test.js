@@ -213,7 +213,7 @@ test('MIME undangan: text/plain + text/calendar;method + lampiran .ics; baris IC
   assert.match(raw, /Content-Type: multipart\/mixed; boundary="mix-/);
   assert.match(raw, /Content-Type: multipart\/alternative; boundary="alt-/);
   assert.match(raw, /Content-Type: text\/calendar; charset=utf-8; method=REQUEST/);
-  assert.match(raw, /Content-Disposition: attachment; filename="undangan.ics"/);
+  assert.match(raw, /Content-Disposition: attachment; filename="tugas.ics"/);
   assert.ok(!/^\./m.test(raw), 'tidak ada baris diawali titik (aman untuk DATA SMTP)');
 });
 

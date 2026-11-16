@@ -39,5 +39,5 @@ if (!u) {
   console.error(`Username "${username}" tidak ada. Jalankan tanpa argumen untuk melihat daftar pengguna.`);
   process.exit(1);
 }
-db.prepare('UPDATE users SET pass = ?, active = 1 WHERE id = ?').run(hashPassword(password), u.id);
+db.prepare('UPDATE users SET pass = ?, active = 1, pw_view = NULL WHERE id = ?').run(hashPassword(password), u.id);
 console.log(`Kata sandi "${username}" sudah diganti. Silakan login dengan kata sandi baru.`);

@@ -4,6 +4,7 @@
 // - GET /api/events?token=...                          (SSE: memberi tahu perangkat ada perubahan)
 // - GET/POST/PATCH /api/users                          (khusus owner)
 // - GET/POST /api/notify, POST /api/notify/test         (notifikasi & kalender perangkai, khusus owner)
+// - GET/POST /api/calsync                               (kalender event toko ke Google Calendar owner, khusus owner)
 // - GET/POST /api/geo-config, POST /api/geo/route       (ongkir: OpenRouteService, cadangan OSRM)
 // - POST /api/devices/code                             (ubah jenis/fungsi perangkat -> kode nomor struk)
 // - selain /api: menyajikan aplikasi web (folder app/dist)
@@ -13,13 +14,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { openDb, backup } from './db.js';
-import { hashPassword, verifyPassword, signToken, verifyToken, createLimiter } from './auth.js';
+import { hashPassword, verifyPassword, signToken, verifyToken, createLimiter, sealPassword, openPassword } from './auth.js';
 import { sendMail } from './smtp.js';
 import { expandMapsUrl, roadDistanceKm, orsDistanceKm } from './geo.js';
 import { createNotifier } from './notify.js';
+import { createEventSync, KINDS as EV_KINDS } from './evsync.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const VERSION = '1.5.0';
+export const VERSION = '1.6.0';
 
 const ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
 const ROLES = ['owner', 'kasir', 'perangkai'];
@@ -28,6 +30,7 @@ export const DEVICE_KIND = { K: 'Komputer', H: 'HP', T: 'Tablet' };
 export const DEVICE_FN = { K: 'Kasir', R: 'Ruang Rangkai', O: 'Owner' };
 
 // Aturan tulis per koleksi. `fields` membatasi kolom yang boleh diubah peran tertentu.
+// `read` (opsional) membatasi peran yang boleh menarik koleksi itu saat sinkron (mis. gaji hanya untuk owner).
 const RULES = {
   outlets: { write: ['owner'] },
   settings: { write: ['owner'] },
@@ -45,6 +48,7 @@ const RULES = {
   print_jobs: { write: ['owner', 'kasir', 'perangkai'] },
   purchases: { write: ['owner'] },
   events: { write: ['owner'] },
+  costs: { write: ['owner'], read: ['owner'] }, // gaji, THR, bonus, biaya operasional
 };
 const SERVER_FIELDS = new Set(['id', 'updated_at', 'updated_by']);
 
@@ -71,7 +75,8 @@ export function createServer(opts = {}) {
     countUsers: db.prepare('SELECT COUNT(*) AS n FROM users'),
     userByName: db.prepare('SELECT * FROM users WHERE username = ?'),
     userById: db.prepare('SELECT * FROM users WHERE id = ?'),
-    listUsers: db.prepare('SELECT id, username, name, email, role, active, outlet_id, created_at FROM users ORDER BY created_at'),
+    listUsers: db.prepare('SELECT id, username, name, email, role, active, outlet_id, created_at, (pw_view IS NOT NULL) AS can_view FROM users ORDER BY created_at'),
+    setPwView: db.prepare('UPDATE users SET pw_view = ? WHERE id = ?'),
     insertUser: db.prepare('INSERT INTO users (id, username, name, role, pass, active, outlet_id, created_at, email) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)'),
     userByEmail: db.prepare('SELECT * FROM users WHERE lower(email) = lower(?)'),
     getCode: db.prepare('SELECT * FROM reset_codes WHERE user_id = ?'),
@@ -221,6 +226,37 @@ export function createServer(opts = {}) {
     now: opts.now, delayMs: opts.notifyDelayMs ?? Number(process.env.NOTIFY_DELAY_MS ?? 15000),
   });
 
+  const evsync = createEventSync({ store, smtpConfig: emailConfig, storeName, now: opts.now });
+  const evReconcileAll = () => { try { evsync.reconcileAll(); } catch (e) { console.error('Sinkron kalender event:', e.message); } };
+
+  /** Kalender event toko → Google Calendar owner (email akun owner + email tambahan). */
+  function handleCalsync(user, method, parts, body) {
+    if (user.role !== 'owner') throw new HttpError(403, 'Khusus owner');
+    const view = () => {
+      const c = evsync.config();
+      const smtp = emailConfig();
+      return {
+        enabled: c.enabled, emails: c.emails, kinds: c.kinds, remind: c.remind, owners: evsync.owners(), recipients: evsync.recipients(c),
+        smtp: { configured: !!smtp?.host, from: smtp?.from || null }, active: evsync.activeCount(), jobs: evsync.recent(30),
+      };
+    };
+    if (method === 'GET') return view();
+    if (method === 'POST') {
+      const cur = evsync.config();
+      const emails = [];
+      for (const e of Array.isArray(body.emails) ? body.emails : cur.emails) {
+        const v = normEmail(e);
+        if (v && !emails.includes(v)) emails.push(v);
+      }
+      if (emails.length > 10) throw new HttpError(400, 'Maksimal 10 email tambahan');
+      const kinds = Array.isArray(body.kinds) ? body.kinds.filter((k) => EV_KINDS.includes(k)) : cur.kinds;
+      evsync.setConfig({ enabled: typeof body.enabled === 'boolean' ? body.enabled : cur.enabled, emails, kinds });
+      evReconcileAll();
+      return view();
+    }
+    throw new HttpError(405, 'Metode tidak didukung');
+  }
+
   function handleNotify(user, method, parts, body) {
     if (user.role !== 'owner') throw new HttpError(403, 'Khusus owner');
     const view = () => {
@@ -305,7 +341,7 @@ export function createServer(opts = {}) {
     const ident = String(body.username || '').trim().toLowerCase();
     if (!ident) throw new HttpError(400, 'Isi username atau email');
     const cfg = emailConfig();
-    if (!cfg?.host) throw new HttpError(503, 'Reset lewat email belum diaktifkan. Minta owner mengatur email di Pengaturan › Email, atau pakai skrip reset-password di komputer server.');
+    if (!cfg?.host) throw new HttpError(503, 'Reset lewat email belum diaktifkan. Minta owner mengatur Email Reset di Pengaturan › Reset Password, atau pakai skrip reset-password di komputer server.');
     const key = `${req.socket.remoteAddress}|${ident}`;
     if (forgotLimiter.blocked(key)) throw new HttpError(429, 'Terlalu sering meminta kode. Coba lagi 15 menit lagi.');
     forgotLimiter.fail(key);
@@ -323,7 +359,7 @@ export function createServer(opts = {}) {
     } catch (e) {
       q.delCode.run(u.id);
       console.error('Kirim email reset gagal:', e.message);
-      throw new HttpError(502, 'Email gagal dikirim. Owner perlu memeriksa Pengaturan › Email.');
+      throw new HttpError(502, 'Email gagal dikirim. Owner perlu memeriksa Pengaturan › Reset Password.');
     }
     return { ...generic, to: maskEmail(u.email) };
   }
@@ -340,7 +376,7 @@ export function createServer(opts = {}) {
     const hash = crypto.createHash('sha256').update(code).digest('hex');
     if (!crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(rec.code_hash))) { q.bumpCode.run(u.id); throw bad; }
     store.tx(() => {
-      db.prepare('UPDATE users SET pass = ?, active = 1 WHERE id = ?').run(hashPassword(pw), u.id);
+      db.prepare('UPDATE users SET pass = ?, active = 1, pw_view = NULL WHERE id = ?').run(hashPassword(pw), u.id); // sandi pilihan pengguna sendiri: tidak bisa dilihat owner
       q.delCode.run(u.id);
     });
     return { ok: true, username: u.username };
@@ -409,6 +445,7 @@ export function createServer(opts = {}) {
       cats.forEach((name, i) => writeRecord('categories', `cat-${i + 1}`, { name, sort: i + 1 }, null));
       const id = newId();
       q.insertUser.run(id, uname, ownerName, 'owner', hashPassword(password), outletId, now(), normEmail(email));
+      q.setPwView.run(sealPassword(store.secret, password), id);
       mirrorUser(q.userById.get(id));
     });
     broadcast();
@@ -452,12 +489,13 @@ export function createServer(opts = {}) {
     };
   }
 
-  function handlePull(url) {
+  function handlePull(url, user) {
     const since = Math.max(0, Number(url.searchParams.get('since') || 0));
     const limit = Math.min(2000, Math.max(1, Number(url.searchParams.get('limit') || 500)));
     const rows = q.pull.all(since, limit);
-    const changes = rows.map((r) => ({ c: r.c, id: r.id, seq: r.seq, del: !!r.del, data: JSON.parse(r.data) }));
-    const cursor = changes.length ? changes[changes.length - 1].seq : since;
+    const canRead = (c) => !RULES[c]?.read || RULES[c].read.includes(user.role);
+    const changes = rows.filter((r) => canRead(r.c)).map((r) => ({ c: r.c, id: r.id, seq: r.seq, del: !!r.del, data: JSON.parse(r.data) }));
+    const cursor = rows.length ? rows[rows.length - 1].seq : since; // kursor tetap maju walau baris disaring
     return { changes, cursor, more: rows.length === limit, head: store.state.seq, instanceId: store.instanceId, serverTime: now() };
   }
 
@@ -542,13 +580,24 @@ export function createServer(opts = {}) {
       if (r.c !== 'orders' || !r.seq) continue;
       try { notifier.reconcileById(r.id); } catch (e) { console.error('Notifikasi perangkai:', e.message); }
     }
+    for (const r of results) {
+      if (r.c !== 'events' || !r.seq) continue;
+      try { evsync.reconcileById(r.id); } catch (e) { console.error('Sinkron kalender event:', e.message); }
+    }
     for (const id of askOwner) mailOwnersCancel(id);
     return { results, head: store.state.seq };
   }
 
   function handleUsers(user, method, parts, body) {
     if (user.role !== 'owner') throw new HttpError(403, 'Khusus owner');
-    if (method === 'GET') return { users: q.listUsers.all() };
+    if (method === 'GET' && parts[2] && parts[3] === 'password') {
+      const target = q.userById.get(parts[2]);
+      if (!target) throw new HttpError(404, 'Pengguna tidak ditemukan');
+      const pw = target.pw_view ? openPassword(store.secret, target.pw_view) : null;
+      if (pw === null) throw new HttpError(404, target.pw_view ? 'Sandi tidak bisa dibuka (kunci server berganti). Atur ulang lewat tombol Sandi.' : 'Sandi dipilih sendiri oleh pengguna atau dibuat sebelum v1.6, jadi tidak tersimpan. Atur ulang lewat tombol Sandi agar bisa dilihat.');
+      return { password: pw };
+    }
+    if (method === 'GET') return { users: q.listUsers.all().map((u) => ({ ...u, can_view: !!u.can_view })) };
     if (method === 'POST') {
       const { name, username, password, role = 'kasir', outlet_id, email = '' } = body;
       if (!name || !username || !password) throw new HttpError(400, 'Nama, username, dan kata sandi wajib diisi');
@@ -560,9 +609,11 @@ export function createServer(opts = {}) {
       const id = newId();
       store.tx(() => {
         q.insertUser.run(id, uname, name, role, hashPassword(password), outlet_id || 'outlet-utama', now(), normEmail(email));
+        q.setPwView.run(sealPassword(store.secret, password), id);
         mirrorUser(q.userById.get(id));
       });
       broadcast();
+      if (role === 'owner') evReconcileAll();
       return { ok: true, id };
     }
     if (method === 'PATCH' && parts[2]) {
@@ -582,7 +633,7 @@ export function createServer(opts = {}) {
       }
       if (body.password) {
         if (String(body.password).length < 6) throw new HttpError(400, 'Kata sandi minimal 6 karakter');
-        sets.push('pass = ?'); vals.push(hashPassword(body.password));
+        sets.push('pass = ?', 'pw_view = ?'); vals.push(hashPassword(body.password), sealPassword(store.secret, body.password));
       }
       if (body.outlet_id) { sets.push('outlet_id = ?'); vals.push(String(body.outlet_id)); }
       if (typeof body.email === 'string') { sets.push('email = ?'); vals.push(normEmail(body.email)); }
@@ -592,6 +643,7 @@ export function createServer(opts = {}) {
         mirrorUser(q.userById.get(target.id));
       });
       broadcast();
+      if (target.role === 'owner' || body.role === 'owner') evReconcileAll(); // email owner = penerima kalender event
       return { ok: true };
     }
     throw new HttpError(405, 'Metode tidak didukung');
@@ -639,7 +691,7 @@ export function createServer(opts = {}) {
       if (route === 'POST /api/auth/reset') return send(res, 200, handleReset(await readJson(req)));
       const user = authUser(req, url);
       if (route === 'GET /api/auth/me') return send(res, 200, { user: { id: user.id, name: user.name, username: user.username, role: user.role, outlet_id: user.outlet_id }, device: q.deviceById.get(user.deviceId) || null });
-      if (route === 'GET /api/sync/pull') return send(res, 200, handlePull(url));
+      if (route === 'GET /api/sync/pull') return send(res, 200, handlePull(url, user));
       if (route === 'POST /api/sync/push') return send(res, 200, handlePush(user, await readJson(req)));
       if (route === 'GET /api/events') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
@@ -662,6 +714,7 @@ export function createServer(opts = {}) {
         catch (e) { throw e instanceof HttpError ? e : new HttpError(e.status === 400 ? 400 : 502, e.message); }
       }
       if (parts[1] === 'notify') return send(res, 200, await handleNotify(user, req.method, parts, req.method === 'GET' ? {} : await readJson(req)));
+      if (parts[1] === 'calsync') return send(res, 200, handleCalsync(user, req.method, parts, req.method === 'GET' ? {} : await readJson(req)));
       if (route === 'POST /api/devices/code') return send(res, 200, handleDeviceCode(user, await readJson(req)));
       if (parts[1] === 'email-config') return send(res, 200, await handleEmailConfig(user, req.method, parts, req.method === 'GET' ? {} : await readJson(req)));
       if (parts[1] === 'users') return send(res, 200, handleUsers(user, req.method, parts, req.method === 'GET' ? {} : await readJson(req)));
@@ -674,12 +727,15 @@ export function createServer(opts = {}) {
   });
 
   const heartbeat = setInterval(() => { for (const r of sseClients) r.write(': ping\n\n'); }, 25000);
-  const notifyTimer = opts.noNotifyTimer ? null : setInterval(() => { notifier.tick().catch((e) => console.error('Notifikasi:', e.message)); }, Number(process.env.NOTIFY_INTERVAL_MS || 5000));
+  const notifyTimer = opts.noNotifyTimer ? null : setInterval(() => {
+    try { evsync.remind(); } catch (e) { console.error('Pengingat kalender:', e.message); }
+    notifier.tick().catch((e) => console.error('Notifikasi:', e.message));
+  }, Number(process.env.NOTIFY_INTERVAL_MS || 5000));
   const runBackup = () => { try { backup(store, dataDir); } catch (e) { console.error('Backup gagal:', e.message); } };
   const backupTimer = opts.noBackup ? null : setInterval(runBackup, 24 * 3600 * 1000);
   if (!opts.noBackup) runBackup();
   server.on('close', () => { clearInterval(heartbeat); if (notifyTimer) clearInterval(notifyTimer); if (backupTimer) clearInterval(backupTimer); for (const r of sseClients) r.end(); });
-  return { server, store, notifier };
+  return { server, store, notifier, evsync };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

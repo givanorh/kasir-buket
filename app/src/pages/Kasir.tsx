@@ -413,7 +413,7 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
       <div className="checkout">
         <div className="stack">
           <div className="section-title">Pelanggan</div>
-          <Field label="Nomor HP" hint={cust ? undefined : mn ? 'Nomor belum tersimpan: transaksi tetap bisa dilanjutkan. Centang Daftarkan member bila pelanggan setuju.' : 'Opsional. Bila nomor sudah tersimpan, data pelanggan terisi otomatis. Tanpa nomor tetap bisa bertransaksi.'}>
+          <Field label="Nomor HP" hint={!cust && mn ? 'Nomor belum tersimpan: transaksi tetap bisa dilanjutkan. Centang Daftarkan member bila pelanggan setuju.' : undefined}>
             <div className={`lookup ${cust ? 'found' : ''}`}>
               <input inputMode="tel" autoFocus value={f.phone} placeholder="08…" data-testid="cust-phone" aria-label="Nomor HP"
                 onChange={(e) => { const v = e.target.value; setF((x) => ({ ...x, phone: v, customerId: memberNo(v) && memberNo(v) === memberNo(cust?.phone) ? x.customerId : '' })); }} />

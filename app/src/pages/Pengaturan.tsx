@@ -28,7 +28,7 @@ export default function Pengaturan() {
     { value: 'printer', label: 'Printer' },
     ...(owner ? [
       { value: 'toko', label: 'Toko & cabang' }, { value: 'promo', label: 'Promo, poin & ongkir' }, { value: 'perangkai', label: 'Perangkai' },
-      { value: 'survei', label: 'Survei' }, { value: 'pengguna', label: 'Pengguna' }, { value: 'email', label: 'Email' }, { value: 'impor', label: 'Impor Kasir Pintar' },
+      { value: 'survei', label: 'Survei' }, { value: 'pengguna', label: 'Pengguna' }, { value: 'email', label: 'Reset Password' }, { value: 'impor', label: 'Impor Kasir Pintar' },
     ] as { value: Tab; label: string }[] : []),
   ];
   return (
@@ -397,12 +397,18 @@ function PromoTab() {
   );
 }
 
-interface UserRow { id: string; username: string; name: string; email?: string | null; role: Role; active: number; outlet_id?: string | null }
+interface UserRow { id: string; username: string; name: string; email?: string | null; role: Role; active: number; outlet_id?: string | null; can_view?: boolean }
 function UsersTab() {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [f, setF] = useState({ name: '', username: '', password: '', email: '', role: 'kasir' as Role, outlet_id: 'outlet-utama' });
   const outlets = useLiveQuery(() => db.outlets.toArray(), []) || [];
+  const [shown, setShown] = useState<Record<string, string>>({});
   const load = () => api<{ users: UserRow[] }>('/api/users').then((r) => setUsers(r.users)).catch((e) => toast(e.message, 'err'));
+  async function reveal(u: UserRow) {
+    if (shown[u.id] !== undefined) { const { [u.id]: _, ...rest } = shown; setShown(rest); return; }
+    try { const r = await api<{ password: string }>(`/api/users/${u.id}/password`); setShown({ ...shown, [u.id]: r.password }); }
+    catch (e) { toast((e as Error).message, 'err'); }
+  }
   useEffect(() => { load(); }, []);
   async function add() {
     try { await api('/api/users', { body: f }); toast('Pengguna dibuat'); setF({ name: '', username: '', password: '', email: '', role: 'kasir', outlet_id: f.outlet_id }); load(); } catch (e) { toast((e as Error).message, 'err'); }
@@ -420,27 +426,34 @@ function UsersTab() {
             <div key={u.id} className={`urow ${u.active ? '' : 'off'}`} data-testid="user-row">
               <div className="uwho">
                 <span className="avatar">{u.name.replace(/[^\p{L}\s]/gu, '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase()}</span>
-                <div className="grow"><b>{u.name}</b>{!u.active && <Badge tone="red">nonaktif</Badge>}<div className="muted">@{u.username} · {u.email || <span className="red">tanpa email</span>}</div></div>
+                <div className="grow"><b>{u.name}</b>{!u.active && <Badge tone="red">nonaktif</Badge>}<div className="muted">@{u.username} · {u.email || <span className="red">tanpa email</span>}</div>
+                  {shown[u.id] !== undefined && (
+                    <div className="pwshow" data-testid="sandi-terlihat">Sandi <code>{shown[u.id]}</code>
+                      <button className="linkish small" onClick={() => { navigator.clipboard?.writeText(shown[u.id]).then(() => toast('Sandi disalin')).catch(() => toast('Salin manual dari layar', 'err')); }}>Salin</button></div>
+                  )}</div>
               </div>
               <select value={u.role} onChange={(e) => patch(u.id, { role: e.target.value })} aria-label={`Peran ${u.name}`}><option value="owner">Owner</option><option value="kasir">Admin</option><option value="perangkai">Perangkai</option></select>
               <select value={u.outlet_id || 'outlet-utama'} onChange={(e) => patch(u.id, { outlet_id: e.target.value })} aria-label={`Cabang ${u.name}`}>{outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select>
               <div className="uact">
                 <button className="btn small ghost" onClick={() => { const em = prompt(`Email untuk ${u.name} (kosongkan untuk menghapus)`, u.email || ''); if (em !== null) patch(u.id, { email: em }); }}>Email</button>
-                <button className="btn small ghost" onClick={() => { const pw = prompt(`Kata sandi baru untuk ${u.name} (min. 6)`); if (pw) patch(u.id, { password: pw }); }}>Sandi</button>
+                <button className="btn small ghost" onClick={() => reveal(u)} title={u.can_view ? 'Lihat sandi' : 'Sandi dipilih sendiri oleh pengguna: atur ulang lewat Sandi agar bisa dilihat'} data-testid="lihat-sandi"
+                  aria-label={`${shown[u.id] !== undefined ? 'Sembunyikan' : 'Lihat'} sandi ${u.name}`}><Icon name={shown[u.id] !== undefined ? 'eyeoff' : 'eye'} size={16} />{shown[u.id] !== undefined ? 'Tutup' : 'Lihat'}</button>
+                <button className="btn small ghost" onClick={() => { const pw = prompt(`Kata sandi baru untuk ${u.name} (min. 6)`); if (pw) { patch(u.id, { password: pw }); const { [u.id]: _, ...rest } = shown; setShown(rest); } }}>Sandi</button>
                 <button className={`btn small ${u.active ? 'ghost danger' : 'primary'}`} onClick={() => patch(u.id, { active: !u.active })}>{u.active ? 'Nonaktifkan' : 'Aktifkan'}</button>
               </div>
             </div>
           ))}
         </div>
+        <p className="muted small"><b>Lihat</b> menampilkan sandi yang diatur owner (saat membuat pengguna atau lewat tombol Sandi). Sandi yang diganti pengguna sendiri lewat “Lupa kata sandi?” tidak disimpan, jadi tidak bisa dilihat; atur ulang lewat Sandi bila perlu.</p>
         <p className="muted small">Peran: <b>Owner</b> semua menu termasuk laporan dan pengaturan promo; <b>Admin</b> kasir, pesanan, pelanggan, shift; <b>Perangkai</b> papan produksi. Cabang menentukan stok dan laporan saat pengguna masuk.</p>
       </section>
       <section className="card">
         <h3>Tambah pengguna</h3>
         <div className="formgrid">
           <Field label="Nama"><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-          <Field label="Username"><input value={f.username} onChange={(e) => setF({ ...f, username: e.target.value.toLowerCase() })} autoCapitalize="none" /></Field>
-          <Field label="Email (untuk reset kata sandi)"><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} autoCapitalize="none" /></Field>
-          <Field label="Kata sandi (min. 6)"><input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></Field>
+          <Field label="Username"><input value={f.username} onChange={(e) => setF({ ...f, username: e.target.value.toLowerCase() })} autoCapitalize="none" autoComplete="off" name="kb-new-username" data-lpignore="true" /></Field>
+          <Field label="Email (untuk reset kata sandi)"><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} autoCapitalize="none" autoComplete="off" /></Field>
+          <Field label="Kata sandi (min. 6)"><input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} autoComplete="new-password" name="kb-new-password" /></Field>
           <Field group label="Peran"><Seg value={f.role} onChange={(role) => setF({ ...f, role })} options={[{ value: 'kasir', label: 'Admin' }, { value: 'perangkai', label: 'Perangkai' }, { value: 'owner', label: 'Owner' }]} /></Field>
           <Field label="Cabang"><select value={f.outlet_id} onChange={(e) => setF({ ...f, outlet_id: e.target.value })}>{outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></Field>
         </div>
@@ -503,22 +516,22 @@ function EmailTab() {
   useEffect(() => { load(); }, []);
   async function saveCfg() {
     setBusy(true);
-    try { setCfg(await api<EmailCfg>('/api/email-config', { body: { ...f, from: f.user } })); setF({ ...f, pass: '' }); toast('Pengaturan email disimpan'); }
+    try { setCfg(await api<EmailCfg>('/api/email-config', { body: { ...f, from: f.user } })); setF({ ...f, pass: '' }); toast('Email Reset disimpan'); }
     catch (e) { toast((e as Error).message, 'err'); } finally { setBusy(false); }
   }
   async function test() {
     setBusy(true);
-    try { const r = await api<{ to: string }>('/api/email-config/test', { body: { to: testTo }, timeout: 40000 }); toast(`Email uji terkirim ke ${r.to}`); }
+    try { const r = await api<{ to: string }>('/api/email-config/test', { body: { to: testTo }, timeout: 40000 }); toast(`Tes Email terkirim ke ${r.to}`); }
     catch (e) { toast((e as Error).message, 'err'); } finally { setBusy(false); }
   }
   if (!cfg) return null;
   return (
     <div className="two">
       <section className="card">
-        <h3>Email pengirim (untuk kode reset kata sandi)</h3>
+        <h3>Email Reset</h3>
         <div className="row"><span>Status</span><b className={cfg.configured ? 'ok' : 'red'}>{cfg.configured ? 'Aktif' : 'Belum diatur'}</b></div>
-        <Field label="Alamat Gmail pengirim"><input type="email" value={f.user} onChange={(e) => setF({ ...f, user: e.target.value.trim() })} autoCapitalize="none" placeholder="tokoanda@gmail.com" /></Field>
-        <Field label="App password Gmail (16 huruf)" hint={cfg.hasPassword ? 'Sudah tersimpan. Kosongkan bila tidak diganti.' : undefined}>
+        <Field label="Akun GMAIL Toko"><input type="email" value={f.user} onChange={(e) => setF({ ...f, user: e.target.value.trim() })} autoCapitalize="none" placeholder="tokoanda@gmail.com" /></Field>
+        <Field label="Pass Email Toko"  hint={cfg.hasPassword ? 'Sudah tersimpan. Kosongkan bila tidak diganti.' : undefined}>
           <input type="password" value={f.pass} onChange={(e) => setF({ ...f, pass: e.target.value })} autoComplete="new-password" placeholder="xxxx xxxx xxxx xxxx" />
         </Field>
         <Field label="Nama pengirim"><input value={f.fromName} onChange={(e) => setF({ ...f, fromName: e.target.value })} placeholder="Buket Stabat" /></Field>
@@ -527,9 +540,9 @@ function EmailTab() {
           <Field label="Port"><input type="number" value={f.port} onChange={(e) => setF({ ...f, port: Number(e.target.value) })} /></Field>
         </div>
         <button className="btn primary" disabled={busy || !f.user || !f.host || (!f.pass && !cfg.hasPassword)} onClick={saveCfg}>Simpan</button>
-        <h3>Kirim email uji</h3>
+        <h3>Tes Email</h3>
         <Field label="Kirim ke" hint="Kosongkan untuk mengirim ke email akun owner"><input type="email" value={testTo} onChange={(e) => setTestTo(e.target.value)} autoCapitalize="none" /></Field>
-        <button className="btn" disabled={busy || !cfg.configured} onClick={test}>{busy ? 'Memproses…' : 'Kirim email uji'}</button>
+        <button className="btn" disabled={busy || !cfg.configured} onClick={test}>{busy ? 'Memproses…' : 'Tes Email'}</button>
       </section>
       <section className="card">
         <h3>Cara membuat App password Gmail</h3>
@@ -537,9 +550,9 @@ function EmailTab() {
           <li>Pakai akun Gmail khusus toko bila ada.</li>
           <li>Aktifkan <b>Verifikasi 2 Langkah</b> di Akun Google › Keamanan.</li>
           <li>Buka <b>myaccount.google.com/apppasswords</b>, buat app password bernama “Kasir Buket”.</li>
-          <li>Salin 16 huruf yang muncul ke kolom App password di samping, lalu Simpan dan Kirim email uji.</li>
+          <li>Salin 16 huruf yang muncul ke kolom Pass Email Toko di samping, lalu Simpan dan Tes Email.</li>
         </ol>
-        <p className="muted small">App password hanya tersimpan di server dan tidak pernah dikirim ke HP atau browser. Setiap pengguna perlu punya email di Pengaturan › Pengguna agar bisa memakai “Lupa kata sandi?”.</p>
+        <p className="muted small">Akun GMAIL Toko ini juga dipakai untuk mengirim tugas ke perangkai dan kalender event ke owner. Pass Email Toko hanya tersimpan di server dan tidak pernah dikirim ke HP atau browser. Setiap pengguna perlu punya email di Pengaturan › Pengguna agar bisa memakai “Lupa kata sandi?”.</p>
         <p className="muted small">Server harus terhubung ke internet agar email terkirim. Bila Gmail menolak, cabut app password lama lalu buat yang baru.</p>
       </section>
     </div>
@@ -595,7 +608,7 @@ interface NotifyJob { id: number; order_id: string; email: string; florist: stri
 interface NotifyView { enabled: boolean; leadMinutes: number; contacts: { name: string; email: string }[]; smtp: { configured: boolean; from: string | null }; jobs: NotifyJob[] }
 const JOB_STATUS: Record<NotifyJob['status'], [string, 'green' | 'amber' | 'red' | 'gray']> = { sent: ['Terkirim', 'green'], pending: ['Menunggu', 'amber'], failed: ['Gagal', 'red'], expired: ['Kedaluwarsa', 'gray'] };
 
-/** Daftar perangkai + email Google mereka untuk notifikasi tugas dan undangan Google Calendar. */
+/** Daftar perangkai + email Google mereka untuk notifikasi Tugas di Google Calendar. */
 function FloristTab() {
   const st = useLiveQuery(() => db.settings.get('toko'));
   const [nv, setNv] = useState<NotifyView | null>(null);
@@ -624,7 +637,7 @@ function FloristTab() {
   }
   async function test(name: string, cancel: boolean) {
     setBusy(name);
-    try { const r = await api<{ email: string }>('/api/notify/test', { body: { name, cancel }, timeout: 40000 }); toast(cancel ? `Pembatalan uji dikirim ke ${r.email}` : `Undangan uji dikirim ke ${r.email}. Cek Google Calendar besok 09.00.`); }
+    try { const r = await api<{ email: string }>('/api/notify/test', { body: { name, cancel }, timeout: 40000 }); toast(cancel ? `Pembatalan Tugas uji dikirim ke ${r.email}` : `Tugas uji dikirim ke ${r.email}. Cek Google Calendar besok 09.00.`); }
     catch (e) { toast((e as Error).message, 'err'); } finally { setBusy(''); }
   }
   const saved = (n: string) => nv.contacts.some((c) => c.name.trim().toLowerCase() === n.trim().toLowerCase());
@@ -640,8 +653,8 @@ function FloristTab() {
                 <input value={r.name} onChange={(e) => setRow(i, { name: e.target.value })} aria-label={`Nama perangkai ${i + 1}`} />
                 <input type="email" value={r.email} onChange={(e) => setRow(i, { email: e.target.value.trim() })} placeholder="nama@gmail.com" autoCapitalize="none" aria-label={`Email ${r.name || 'perangkai'}`} />
                 <div className="uact">
-                  <button className="btn small ghost" disabled={!!busy || !saved(r.name) || !nv.smtp.configured} onClick={() => test(r.name, false)} title="Kirim undangan uji">Uji</button>
-                  <button className="btn small ghost" disabled={!!busy || !saved(r.name) || !nv.smtp.configured} onClick={() => test(r.name, true)} title="Batalkan undangan uji">Batalkan uji</button>
+                  <button className="btn small ghost" disabled={!!busy || !saved(r.name) || !nv.smtp.configured} onClick={() => test(r.name, false)} title="Kirim Tugas uji">Uji</button>
+                  <button className="btn small ghost" disabled={!!busy || !saved(r.name) || !nv.smtp.configured} onClick={() => test(r.name, true)} title="Batalkan Tugas uji">Batalkan uji</button>
                   <button className="icon-btn" onClick={() => setRows(rows.filter((_, j) => j !== i))} aria-label={`Hapus ${r.name}`}><Icon name="close" size={18} /></button>
                 </div>
               </div>
@@ -655,12 +668,12 @@ function FloristTab() {
           <label className="check"><input type="checkbox" checked={opt.enabled} onChange={(e) => setOpt({ ...opt, enabled: e.target.checked })} data-testid="notif-aktif" />Kirim otomatis saat perangkai ditunjuk</label>
           <Field label="Durasi rangkai di kalender (menit sebelum jadwal ambil/antar)"><input type="number" min={15} max={1440} step={15} value={opt.leadMinutes} onChange={(e) => setOpt({ ...opt, leadMinutes: Number(e.target.value) })} aria-label="Durasi rangkai" /></Field>
           <dl className="dl">
-            <dt>Pengirim</dt><dd>{nv.smtp.configured ? nv.smtp.from : <span className="red">Belum diatur. Isi di tab Email.</span>}</dd>
-            <dt>Ditunjuk</dt><dd>Email tugas + undangan kalender ke perangkai (±15 detik setelah tersimpan).</dd>
-            <dt>Jadwal/isi berubah</dt><dd>Undangan diperbarui.</dd>
-            <dt>Dipindah / batal</dt><dd>Undangan dibatalkan, acara hilang dari kalender perangkai.</dd>
+            <dt>Pengirim</dt><dd>{nv.smtp.configured ? nv.smtp.from : <span className="red">Belum diatur. Isi di tab Reset Password.</span>}</dd>
+            <dt>Ditunjuk</dt><dd>Email + Tugas di Google Calendar perangkai (±15 detik setelah tersimpan).</dd>
+            <dt>Jadwal/isi berubah</dt><dd>Tugas diperbarui.</dd>
+            <dt>Dipindah / batal</dt><dd>Tugas dibatalkan, acara hilang dari kalender perangkai.</dd>
           </dl>
-          <div className="note warn small">Sekali per perangkai: simpan alamat {nv.smtp.from || 'email toko'} di Kontak Google mereka, atau di Google Calendar › Setelan › Setelan acara › “Tambahkan undangan ke kalender saya” pilih “Dari semua orang”. Tanpa ini Google bisa menahan undangan dari pengirim yang belum dikenal. Pakai tombol Uji lalu Batalkan uji untuk memastikan.</div>
+          <div className="note warn small">Sekali per perangkai: simpan alamat {nv.smtp.from || 'email toko'} di Kontak Google mereka, atau di Google Calendar › Setelan › Setelan acara › “Tambahkan undangan ke kalender saya” pilih “Dari semua orang”. Tanpa ini Google bisa menahan Tugas dari pengirim yang belum dikenal. Pakai tombol Uji lalu Batalkan uji untuk memastikan.</div>
         </section>
       </div>
       <button className="btn primary big" onClick={saveAll} disabled={busy === 'save'} data-testid="simpan-perangkai">Simpan perangkai & notifikasi</button>
@@ -673,7 +686,7 @@ function FloristTab() {
               <div className="muted hide-sm">{fmtShort(j.sent_at || j.created_at)}</div>
               <div><b>{j.label}</b></div>
               <div className="clip">{j.florist}<div className="muted clip">{j.email}{j.last_error ? ` · ${j.last_error}` : ''}</div></div>
-              <div className="hide-sm">{j.kind === 'cancel' ? 'Pembatalan' : j.seq > 0 ? 'Pembaruan' : 'Undangan baru'}</div>
+              <div className="hide-sm">{j.kind === 'cancel' ? 'Pembatalan' : j.seq > 0 ? 'Pembaruan' : 'Tugas baru'}</div>
               <div><Badge tone={JOB_STATUS[j.status][1]}>{JOB_STATUS[j.status][0]}</Badge></div>
             </div>
           ))}

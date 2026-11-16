@@ -85,10 +85,14 @@ export function openDb(dataDir) {
       sent_at TEXT
     );
     CREATE INDEX IF NOT EXISTS notify_jobs_due ON notify_jobs(status, next_at);
+    -- pengingat H-7/H-3 kalender event owner yang sudah diantrekan (kunci: event|tanggal|H|email)
+    CREATE TABLE IF NOT EXISTS ev_reminders (key TEXT PRIMARY KEY, created_at TEXT NOT NULL);
   `);
   // migrasi: kolom email pengguna (untuk reset kata sandi lewat email)
   const userCols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
   if (!userCols.includes('email')) db.exec('ALTER TABLE users ADD COLUMN email TEXT');
+  // migrasi v1.6: salinan sandi terenkripsi untuk fitur "Lihat sandi" owner (NULL = tidak bisa dilihat)
+  if (!userCols.includes('pw_view')) db.exec('ALTER TABLE users ADD COLUMN pw_view TEXT');
   // migrasi: daftarkan kode perangkat yang sudah ada sebagai kode terpakai
   db.exec('INSERT OR IGNORE INTO device_codes (code, device_id, created_at) SELECT code, id, created_at FROM devices');
 

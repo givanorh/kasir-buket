@@ -8,7 +8,6 @@ import { Toasts, useThumb } from './components/ui';
 import { Icon } from './components/icons';
 import { DueAlert, usePendingCancels } from './components/Alerts';
 import Kalender from './pages/Kalender';
-import Belanja from './pages/Belanja';
 import Setup from './pages/Setup';
 import Kasir from './pages/Kasir';
 import Pesanan from './pages/Pesanan';
@@ -29,7 +28,6 @@ const PAGES: { key: string; label: string; roles: Role[]; el: () => ReactElement
   { key: 'produksi', label: 'Produksi', roles: ['owner', 'kasir', 'perangkai'], el: () => <Produksi /> },
   { key: 'pelanggan', label: 'Pelanggan', roles: ['owner', 'kasir'], el: () => <Pelanggan /> },
   { key: 'produk', label: 'Produk', roles: ['owner'], el: () => <Produk /> },
-  { key: 'belanja', label: 'Belanja bahan', roles: ['owner'], el: () => <Belanja /> },
   { key: 'shift', label: 'Shift', roles: ['owner', 'kasir'], el: () => <ShiftPage /> },
   { key: 'laporan', label: 'Laporan', roles: ['owner'], el: () => <Laporan /> },
   { key: 'kalender', label: 'Kalender', roles: ['owner'], el: () => <Kalender /> },
@@ -37,9 +35,14 @@ const PAGES: { key: string; label: string; roles: Role[]; el: () => ReactElement
 ];
 
 function useHash() {
+  // v1.6: menu Belanja bahan pindah ke Laporan › Perhitungan HPP (tautan lama tetap berlaku)
+  if (/^#\/?belanja/.test(location.hash)) history.replaceState(null, '', '#/laporan?v=hpp&s=belanja');
   const [h, setH] = useState(() => location.hash.replace(/^#\/?/, ''));
   useEffect(() => {
-    const f = () => setH(location.hash.replace(/^#\/?/, ''));
+    const f = () => {
+      if (/^#\/?belanja/.test(location.hash)) history.replaceState(null, '', '#/laporan?v=hpp&s=belanja');
+      setH(location.hash.replace(/^#\/?/, ''));
+    };
     window.addEventListener('hashchange', f);
     return () => window.removeEventListener('hashchange', f);
   }, []);

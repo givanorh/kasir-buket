@@ -82,7 +82,7 @@ export function createNotifier(deps) {
     due: db.prepare("SELECT * FROM notify_jobs WHERE status = 'pending' AND next_at <= ? ORDER BY id LIMIT 5"),
     setJob: db.prepare('UPDATE notify_jobs SET status = ?, attempts = ?, next_at = ?, last_error = ?, sent_at = ? WHERE id = ?'),
     expire: db.prepare("UPDATE notify_jobs SET status = 'expired', last_error = 'Kedaluwarsa: email belum diatur > 48 jam' WHERE status = 'pending' AND created_at < ?"),
-    recent: db.prepare('SELECT id, order_id, email, florist, label, kind, seq, status, attempts, last_error, created_at, sent_at FROM notify_jobs ORDER BY id DESC LIMIT ?'),
+    recent: db.prepare("SELECT id, order_id, email, florist, label, kind, seq, status, attempts, last_error, created_at, sent_at FROM notify_jobs WHERE order_id NOT LIKE 'ev-%' ORDER BY id DESC LIMIT ?"),
     getOrder: db.prepare("SELECT data, del FROM records WHERE c = 'orders' AND id = ?"),
     candidates: db.prepare(`SELECT id FROM records WHERE c = 'orders' AND del = 0 AND json_extract(data, '$.florist') IS NOT NULL AND json_extract(data, '$.florist') != ''
       AND COALESCE(json_extract(data, '$.due_at'), json_extract(data, '$.created_at')) >= ?
@@ -190,9 +190,9 @@ export function createNotifier(deps) {
       if (!smtp?.host) { q.expire.run(new Date(now() - EXPIRE_MS).toISOString()); return 0; }
       for (const job of q.due.all(now())) {
         const p = JSON.parse(job.payload);
-        if (job.kind === 'request') q.markSent.run(job.order_id, job.email); // tandai sebelum kirim agar pembatalan berikutnya pasti terkirim
+        if (job.kind === 'request') q.markSent.run(job.order_id, job.email); // tandai sebelum kirim agar pembatalan berikutnya pasti terkirim (juga untuk event kalender "ev-…")
         try {
-          await sendMail(smtp, { to: job.email, subject: p.subject, text: p.text, calendar: { method: p.method, ics: p.ics } });
+          await sendMail(smtp, { to: job.email, subject: p.subject, text: p.text, calendar: p.ics ? { method: p.method, ics: p.ics, filename: p.filename } : undefined });
           q.setJob.run('sent', job.attempts + 1, job.next_at, null, new Date(now()).toISOString(), job.id);
           sent++;
         } catch (e) {
@@ -214,7 +214,7 @@ export function createNotifier(deps) {
     const email = emailFor(cfg, name);
     if (!email) throw Object.assign(new Error(`Email ${name} belum diisi`), { status: 400 });
     const smtp = smtpConfig();
-    if (!smtp?.host) throw Object.assign(new Error('Atur email pengirim dulu di Pengaturan › Email'), { status: 400 });
+    if (!smtp?.host) throw Object.assign(new Error('Atur Akun GMAIL Toko dulu di Pengaturan › Reset Password'), { status: 400 });
     const wibNow = new Date(now() + 7 * 3600e3);
     const start = Date.UTC(wibNow.getUTCFullYear(), wibNow.getUTCMonth(), wibNow.getUTCDate() + 1, 9 - 7, 0, 0);
     const info = storeInfo({});
@@ -227,7 +227,7 @@ export function createNotifier(deps) {
     await sendMail(smtp, {
       to: email,
       subject: cancel ? `Dibatalkan: [UJI] Kalender ${info.storeName}` : `[UJI] Kalender ${info.storeName}`,
-      text: cancel ? 'Acara uji dibatalkan. Bila acara uji hilang dari Google Calendar, penghapusan otomatis berjalan.\n' : `Halo ${name},\n\nIni undangan uji. Bila acara "[UJI] Kalender ${info.storeName}" muncul di Google Calendar besok pukul 09.00, notifikasi tugas rangkai sudah siap.\n`,
+      text: cancel ? 'Tugas uji dibatalkan. Bila acara uji hilang dari Google Calendar, penghapusan otomatis berjalan.\n' : `Halo ${name},\n\nIni Tugas uji. Bila acara "[UJI] Kalender ${info.storeName}" muncul di Google Calendar besok pukul 09.00, notifikasi tugas rangkai sudah siap.\n`,
       calendar: { method: cancel ? 'CANCEL' : 'REQUEST', ics },
     });
     return { ok: true, email };

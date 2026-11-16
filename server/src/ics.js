@@ -32,16 +32,20 @@ export function fold(line) {
 
 const cn = (s) => `"${String(s || '').replace(/["\r\n]/g, '')}"`;
 
+const ymd = (k) => String(k).slice(0, 10).replace(/-/g, '');
+
 /**
- * @param {{method:'REQUEST'|'CANCEL', uid:string, sequence:number, start:Date|string, end:Date|string, stamp?:Date,
+ * @param {{method:'REQUEST'|'CANCEL', uid:string, sequence:number, start?:Date|string, end?:Date|string, stamp?:Date,
+ *   allDay?:{start:string,end:string}, rrule?:string, transparent?:boolean, prodid?:string,
  *   summary:string, description?:string, location?:string, organizer:{email:string,name?:string}, attendee:{email:string,name?:string},
- *   alarmMinutes?:number}} e
+ *   alarmMinutes?:number, alarms?:string[]}} e
+ * `allDay.end` = tanggal sesudah hari terakhir (eksklusif, RFC 5545 §3.6.1). `alarms` = nilai TRIGGER, mis. "-P6DT16H".
  */
 export function buildIcs(e) {
   const cancel = e.method === 'CANCEL';
   const lines = [
     'BEGIN:VCALENDAR',
-    'PRODID:-//Kasir Buket//Notifikasi Perangkai//ID',
+    `PRODID:${e.prodid || '-//Kasir Buket//Notifikasi Perangkai//ID'}`,
     'VERSION:2.0',
     'CALSCALE:GREGORIAN',
     `METHOD:${e.method}`,
@@ -49,16 +53,17 @@ export function buildIcs(e) {
     `UID:${e.uid}`,
     `SEQUENCE:${e.sequence}`,
     `DTSTAMP:${icsTime(e.stamp || new Date())}`,
-    `DTSTART:${icsTime(e.start)}`,
-    `DTEND:${icsTime(e.end)}`,
+    ...(e.allDay ? [`DTSTART;VALUE=DATE:${ymd(e.allDay.start)}`, `DTEND;VALUE=DATE:${ymd(e.allDay.end)}`] : [`DTSTART:${icsTime(e.start)}`, `DTEND:${icsTime(e.end)}`]),
+    ...(e.rrule ? [`RRULE:${e.rrule}`] : []),
     `SUMMARY:${icsText(e.summary)}`,
     ...(e.description ? [`DESCRIPTION:${icsText(e.description)}`] : []),
     ...(e.location ? [`LOCATION:${icsText(e.location)}`] : []),
     `ORGANIZER;CN=${cn(e.organizer.name)}:mailto:${e.organizer.email}`,
-    `ATTENDEE;CN=${cn(e.attendee.name)};ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=FALSE:mailto:${e.attendee.email}`,
+    `ATTENDEE;${e.attendee.name ? `CN=${cn(e.attendee.name)};` : ''}ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=FALSE:mailto:${e.attendee.email}`,
     `STATUS:${cancel ? 'CANCELLED' : 'CONFIRMED'}`,
-    'TRANSP:OPAQUE',
+    `TRANSP:${e.transparent ? 'TRANSPARENT' : 'OPAQUE'}`,
     ...(!cancel && e.alarmMinutes ? ['BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsText(e.summary)}`, `TRIGGER:-PT${Math.round(e.alarmMinutes)}M`, 'END:VALARM'] : []),
+    ...(!cancel && e.alarms ? e.alarms.flatMap((t) => ['BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsText(e.summary)}`, `TRIGGER:${t}`, 'END:VALARM']) : []),
     'END:VEVENT',
     'END:VCALENDAR',
   ];

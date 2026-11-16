@@ -201,3 +201,34 @@ test('lupa sandi: kode 6 digit via email, salah ditolak, benar mengganti sandi s
   assert.equal((await json('POST', '/api/auth/forgot', { username: 'vano@example.com' })).body.to, 'va***@example.com');
   smtp.close();
 });
+
+test('owner bisa melihat sandi yang diatur owner; sandi pilihan pengguna sendiri tidak tersimpan', async () => {
+  const users = (await json('GET', '/api/users', null, owner)).body.users;
+  const k1 = users.find((u) => u.username === 'kasir1');
+  const me = users.find((u) => u.username === 'vano');
+  assert.equal(k1.can_view, true);
+  assert.equal((await json('GET', `/api/users/${k1.id}/password`, null, owner)).body.password, 'kasir123');
+  assert.equal((await json('GET', `/api/users/${k1.id}/password`, null, kasir)).status, 403, 'selain owner ditolak');
+  await json('PATCH', `/api/users/${k1.id}`, { password: 'kasirBaru9' }, owner);
+  assert.equal((await json('GET', `/api/users/${k1.id}/password`, null, owner)).body.password, 'kasirBaru9', 'sandi baru dari tombol Sandi');
+  // vano mengganti sandinya sendiri lewat "Lupa kata sandi?" (uji sebelumnya): salinan dihapus
+  assert.equal(me.can_view, false);
+  const r = await json('GET', `/api/users/${me.id}/password`, null, owner);
+  assert.equal(r.status, 404);
+  assert.match(r.body.error, /dipilih sendiri/);
+  const raw = store.db.prepare('SELECT pw_view FROM users WHERE id = ?').get(k1.id).pw_view;
+  assert.ok(raw.startsWith('gcm$') && !raw.includes('kasirBaru9'), 'tersimpan terenkripsi, bukan teks biasa');
+});
+
+test('gaji & biaya (koleksi costs): hanya owner yang menulis dan menarik; kursor pull tetap maju', async () => {
+  const head0 = (await json('GET', '/api/sync/pull?since=0&limit=2000', null, owner)).body.head;
+  const p = await json('POST', '/api/sync/push', { changes: [{ c: 'costs', id: 'cost-iin', patch: { kind: 'pegawai', name: 'Iin', salary: 1400000 } }] }, owner);
+  assert.ok(p.body.results[0].seq > head0);
+  const k = await json('POST', '/api/sync/push', { changes: [{ c: 'costs', id: 'cost-x', patch: { kind: 'pegawai', name: 'X', salary: 1 } }] }, kasir);
+  assert.ok(k.body.results[0].error, 'Admin tidak boleh menulis gaji');
+  const ko = await json('GET', `/api/sync/pull?since=${head0}`, null, kasir);
+  assert.equal(ko.body.changes.filter((c) => c.c === 'costs').length, 0, 'Admin tidak menerima data gaji');
+  assert.equal(ko.body.cursor, p.body.results[0].seq, 'kursor Admin tetap melewati baris gaji');
+  const ow = await json('GET', `/api/sync/pull?since=${head0}`, null, owner);
+  assert.equal(ow.body.changes.find((c) => c.c === 'costs').data.salary, 1400000);
+});

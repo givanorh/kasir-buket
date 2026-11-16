@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../lib/db';
 import { buildAnalysis, buildReport, scheduledQtyOn } from '../lib/calc';
@@ -6,7 +6,10 @@ import { addDays, dayKey, endOfDay, fmtDate, num, rp, startOfDay } from '../lib/
 import { Field, Seg, TabPanel } from '../components/ui';
 import { storeCfg } from '../lib/settings';
 import type { HppMethod, Order, Settings } from '../lib/types';
-import { save } from '../lib/store';
+import { save, saveMany } from '../lib/store';
+import { useSyncStatus } from '../lib/sync';
+import { DEFAULT_COSTS } from '../lib/costs';
+import { HppView } from './Hpp';
 
 type Preset = 'hari' | 'kemarin' | '7' | 'bulan' | 'custom';
 
@@ -33,7 +36,14 @@ export default function Laporan() {
   const [a, setA] = useState(dayKey(addDays(new Date(), -30)));
   const [b, setB] = useState(dayKey(new Date()));
   const [outlet, setOutlet] = useState('');
-  const [view, setView] = useState<'labarugi' | 'analisis'>('labarugi');
+  const [view, setView] = useState<'labarugi' | 'hpp' | 'analisis'>(() => (/[?&]v=hpp/.test(location.hash) ? 'hpp' : 'labarugi'));
+  const costs = useLiveQuery(() => db.costs.toArray(), []);
+  const st = useSyncStatus();
+  // isian awal gaji & biaya sekali, setelah sinkron selesai (agar tidak menimpa data owner di server)
+  useEffect(() => {
+    if (!costs || costs.length || !st.lastSync || st.syncing || st.pending) return;
+    saveMany(DEFAULT_COSTS.map(({ id, ...p }) => ({ c: 'costs' as const, id, patch: p })));
+  }, [costs?.length, st.lastSync, st.syncing, st.pending]); // eslint-disable-line
   const orders = useLiveQuery(() => db.orders.toArray(), []) || [];
   const payments = useLiveQuery(() => db.payments.toArray(), []) || [];
   const cashMoves = useLiveQuery(() => db.cash_moves.toArray(), []) || [];
@@ -42,7 +52,7 @@ export default function Laporan() {
   const purchases = useLiveQuery(() => db.purchases.toArray(), []) || [];
   const hppMethod: HppMethod = settings?.hpp_method || 'gabungan';
   const [from, to] = rangeOf(preset, a, b);
-  const r = useMemo(() => buildReport({ orders, payments, cashMoves, from, to, outletId: outlet || undefined, purchases, hppMethod }), [orders, payments, cashMoves, purchases, hppMethod, from.getTime(), to.getTime(), outlet]);
+  const r = useMemo(() => buildReport({ orders, payments, cashMoves, from, to, outletId: outlet || undefined, purchases, hppMethod, costs: costs || [] }), [orders, payments, cashMoves, purchases, hppMethod, costs, from.getTime(), to.getTime(), outlet]);
   const piutangAll = useMemo(() => {
     const paid = new Map<string, number>();
     for (const p of payments) if (!p.void) paid.set(p.order_id, (paid.get(p.order_id) || 0) + p.amount);
@@ -62,7 +72,7 @@ export default function Laporan() {
   return (
     <div className="page">
       <div className="toolbar">
-        <Seg value={view} onChange={setView} options={[{ value: 'labarugi', label: 'Laba rugi' }, { value: 'analisis', label: 'Analisis penjualan' }]} />
+        <Seg value={view} onChange={setView} options={[{ value: 'labarugi', label: 'Laba rugi' }, { value: 'hpp', label: 'Perhitungan HPP' }, { value: 'analisis', label: 'Analisis penjualan' }]} />
         <span className="grow" />
         <button className="btn" onClick={exportCsv}>Ekspor CSV</button>
       </div>
@@ -72,14 +82,14 @@ export default function Laporan() {
         {outlets.length > 1 && <select value={outlet} onChange={(e) => setOutlet(e.target.value)} aria-label="Cabang"><option value="">Semua cabang</option>{outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select>}
         <span className="muted">{fmtDate(from.toISOString())} s.d. {fmtDate(to.toISOString())}{r.voided ? ` · ${r.voided} transaksi batal tidak dihitung` : ''}</span>
       </div>
-      <TabPanel k={view} order={['labarugi', 'analisis']}>
-      {view === 'analisis' ? <Analisis orders={orders} from={from} to={to} outletId={outlet || undefined} /> : <div className="page">
+      <TabPanel k={view} order={['labarugi', 'hpp', 'analisis']}>
+      {view === 'hpp' ? <HppView r={r} costs={costs || []} from={from} to={to} hppMethod={hppMethod} /> : view === 'analisis' ? <Analisis orders={orders} from={from} to={to} outletId={outlet || undefined} /> : <div className="page">
 
       <div className="kpis" data-testid="kpis">
         <div className="kpi"><span>Transaksi</span><b>{num(r.count)}</b><i>{num(r.qty)} item</i></div>
         <div className="kpi"><span>Penjualan bersih</span><b>{rp(r.netSales)}</b><i>rata-rata {rp(r.count ? r.netSales / r.count : 0)}/trx</i></div>
         <div className="kpi"><span>Laba kotor</span><b>{rp(r.grossProfit)}</b><i>margin {r.netSales ? ((r.grossProfit / r.netSales) * 100).toFixed(1) : 0}%</i></div>
-        <div className="kpi"><span>Laba bersih</span><b className={r.netProfit < 0 ? 'red' : ''}>{rp(r.netProfit)}</b><i>setelah beban {rp(r.expenses)}</i></div>
+        <div className="kpi"><span>Laba bersih</span><b className={r.netProfit < 0 ? 'red' : ''}>{rp(r.netProfit)}</b><i>setelah beban {rp(r.expensesTotal)}</i></div>
       </div>
 
       <div className="two">
@@ -91,11 +101,15 @@ export default function Laporan() {
           <div className="row strong"><span>= Penjualan bersih</span><b>{rp(r.netSales)}</b></div>
           <div className="row" data-testid="hpp-method"><span className="muted small">Dasar HPP</span><Seg value={hppMethod} onChange={(v) => save<Settings>('settings', 'toko', { hpp_method: v })} options={[{ value: 'gabungan', label: 'Gabungan' }, { value: 'belanja', label: 'Belanja bahan' }, { value: 'produk', label: 'Modal produk' }]} /></div>
           {hppMethod !== 'belanja' && <div className="row"><span>− HPP modal produk (Σ qty × modal)</span><b>{rp(r.cogsProduct)}</b></div>}
-          {hppMethod !== 'produk' && <div className="row"><span>− Belanja bahan ({r.purchaseCount} baris, <a href="#/belanja">lihat</a>)</span><b data-testid="hpp-belanja">{rp(r.purchases)}</b></div>}
+          {hppMethod !== 'produk' && <div className="row"><span>− Belanja bahan ({r.purchaseCount} baris, <button className="linkish" onClick={() => setView('hpp')}>lihat</button>)</span><b data-testid="hpp-belanja">{rp(r.purchases)}</b></div>}
           {hppMethod === 'produk' && r.purchases > 0 && <div className="row muted small"><span>Belanja bahan periode ini {rp(r.purchases)} tidak dihitung (dasar HPP: modal produk)</span></div>}
           <div className="row strong"><span>= Laba kotor</span><b>{rp(r.grossProfit)}</b></div>
-          <div className="row"><span>− Beban operasional</span><b>{rp(r.expenses)}</b></div>
-          <div className="row strong"><span>= Laba bersih</span><b>{rp(r.netProfit)}</b></div>
+          <div className="row"><span>− Gaji pegawai</span><b data-testid="beban-gaji">{rp(r.labor)}</b></div>
+          <div className="row"><span>− THR & bonus</span><b data-testid="beban-thr">{rp(r.benefits)}</b></div>
+          <div className="row"><span>− Biaya operasional (listrik, servis, dll)</span><b data-testid="beban-ops">{rp(r.opex)}</b></div>
+          <div className="row"><span>− Kas keluar berjenis biaya (Shift)</span><b>{rp(r.expenses)}</b></div>
+          <div className="row strong"><span>= Laba bersih</span><b data-testid="laba-bersih">{rp(r.netProfit)}</b></div>
+          <p className="muted small">Gaji, THR, bonus, dan biaya rutin dialokasikan ke periode secara proporsional hari (atur di <button className="linkish" onClick={() => setView('hpp')}>Perhitungan HPP</button>). Bila biaya yang sama juga dicatat sebagai kas keluar di Shift, nolkan salah satunya agar tidak terhitung dua kali.</p>
           {r.salesNoCost > 0 && r.netSales > 0 && hppMethod !== 'belanja' && r.purchases === 0 && (
             <div className="note warn small" data-testid="hpp-kosong">{rp(r.salesNoCost)} ({((r.salesNoCost / r.netSales) * 100).toLocaleString('id-ID', { maximumFractionDigits: 1 })}% penjualan) berasal dari item ber-HPP Rp 0, sehingga laba kotor tercatat lebih tinggi dari kenyataan. Isi HPP di menu Produk; transaksi baru memakai HPP terbaru.</div>
           )}

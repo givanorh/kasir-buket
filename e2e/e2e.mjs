@@ -88,6 +88,11 @@ try {
   await A.getByRole('button', { name: 'Tambah pengguna', exact: true }).click();
   await A.getByText('@tiara').waitFor();
   assert(true, 'akun perangkai & Admin dibuat');
+  await A.getByRole('button', { name: 'Lihat sandi Tiara' }).click();
+  await A.getByTestId('sandi-terlihat').filter({ hasText: 'tiara123' }).waitFor();
+  assert(true, 'owner melihat sandi Tiara (tiara123) lewat tombol Lihat');
+  await A.screenshot({ path: path.join(SHOTS, '21-lihat-sandi.png') });
+  await A.getByRole('button', { name: 'Sembunyikan sandi Tiara' }).click();
 
   // shift
   await A.goto(BASE + '/#/shift');
@@ -358,6 +363,16 @@ try {
   const nev = await A.getByTestId('event-row').count();
   const rowOf = (t) => A.locator('[data-testid=event-row] .ev-main > div > b').filter({ hasText: t }).count();
   assert(nev >= 30 && await rowOf('Valentine') === 1 && await rowOf('Hari Guru Nasional') === 1, `kalender 2026 terisi otomatis: ${nev} event`);
+  const kf = await A.getByTestId('filter-kategori').textContent();
+  assert(/Libur Nasional/.test(kf) && /Lokal/.test(kf) && /Puncak Penjualan/.test(kf) && !/Musim|Momen buket/.test(kf) && await rowOf('Ramadan') === 0, 'kategori: Libur Nasional, Lokal, Puncak Penjualan (Momen buket diganti, Musim & Ramadan dihapus)');
+  await A.getByTestId('filter-kategori').getByRole('button', { name: /Puncak Penjualan/ }).click();
+  const nMomen = Number((await A.getByTestId('filter-kategori').getByRole('button', { name: /Puncak Penjualan/ }).locator('em').textContent()).trim());
+  await A.getByRole('radio', { name: 'Total omzet' }).click();
+  await A.getByTestId('urut-omzet').waitFor();
+  assert((await A.getByTestId('rank-row').count()) === nMomen && nMomen > 5, `filter Puncak Penjualan + urut total omzet: ${nMomen} event berperingkat`);
+  await A.screenshot({ path: path.join(SHOTS, '22-kalender-urut-omzet.png'), fullPage: true });
+  await A.getByRole('radio', { name: 'Tanggal' }).click();
+  await A.getByTestId('filter-kategori').getByRole('button', { name: /Semua/ }).click();
   const agu = A.getByTestId('event-row').filter({ hasText: 'Puncak awal Agustus' });
   await agu.getByTestId('jadikan-rutin').click();
   assert((await A.getByTestId('event-nama').inputValue()) === 'National Girlfriend Day (1 Agu)' && await A.getByTestId('event-rutin').isChecked(), 'lonjakan 1 Agustus diusulkan menjadi event rutin "National Girlfriend Day (1 Agu)"');
@@ -372,8 +387,11 @@ try {
   assert(/Sab, 31 Jul – Sen, 2 Agu/.test(await A.getByTestId('event-row').filter({ hasText: 'National Girlfriend Day' }).textContent()), 'event rutin muncul otomatis di 2027 (31 Jul–2 Agu 2027)');
   await A.getByRole('radio', { name: '2026' }).click();
   await A.screenshot({ path: path.join(SHOTS, '14-kalender.png'), fullPage: true });
-  await A.goto(BASE + '/#/belanja');
-  await A.getByRole('radio', { name: 'Semua' }).click();
+  await A.goto(BASE + '/#/laporan');
+  assert(await A.locator('nav.side a[href="#/belanja"]').count() === 0, 'menu Belanja bahan tidak lagi di navigasi');
+  await A.getByRole('radio', { name: 'Perhitungan HPP' }).click();
+  await A.getByRole('radio', { name: 'Belanja bahan' }).click();
+  await A.getByTestId('belanja').getByRole('radio', { name: 'Semua' }).click();
   await A.getByTestId('unggah').click();
   await A.getByTestId('berkas-belanja').setInputFiles(path.join(ROOT, 'app/test/fixtures/belanja.xlsx'));
   await A.getByTestId('baris-siap').filter({ hasText: '4' }).waitFor();
@@ -388,12 +406,31 @@ try {
   await A.getByTestId('total-belanja').filter({ hasText: 'Rp 450.000' }).waitFor();
   assert(true, 'belanja manual 2 × 6.000 = 12.000 → total Rp 450.000');
   await A.screenshot({ path: path.join(SHOTS, '15-belanja.png'), fullPage: true });
-  await A.goto(BASE + '/#/laporan');
+  await A.getByRole('radio', { name: 'Laba rugi' }).click();
   await A.getByRole('radio', { name: 'Pilih' }).click();
   await A.locator('input[type=date]').first().fill('2026-11-14');
   await A.locator('input[type=date]').nth(1).fill('2026-11-15');
   await A.getByTestId('hpp-belanja').filter({ hasText: 'Rp 438.000' }).waitFor();
   assert(true, 'laba rugi: belanja bahan 14–15 Nov Rp 438.000 masuk HPP (dasar gabungan)');
+  // gaji & biaya: dialokasikan ke laba rugi (Okt 2026 = satu bulan penuh)
+  await A.locator('input[type=date]').first().fill('2026-10-01');
+  await A.locator('input[type=date]').nth(1).fill('2026-10-31');
+  await A.getByTestId('beban-gaji').filter({ hasText: 'Rp 8.700.000' }).waitFor({ timeout: 10000 });
+  assert((await A.getByTestId('beban-thr').textContent()).includes('Rp 725.000'), 'laba rugi Okt 2026: gaji 7 pegawai Rp 8.700.000, THR 8.700.000 ÷ 12 = Rp 725.000');
+  await A.getByRole('radio', { name: 'Perhitungan HPP' }).click();
+  await A.getByRole('radio', { name: 'Gaji & biaya' }).click();
+  await A.getByTestId('pegawai-row').first().waitFor();
+  assert((await A.getByTestId('pegawai-row').count()) === 7 && (await A.getByTestId('jumlah-gaji').textContent()).includes('Rp 8.700.000'), 'Perhitungan HPP › Gaji & biaya: 7 pegawai, jumlah Rp 8.700.000');
+  await A.getByLabel('Nilai Listrik').fill('500000');
+  await A.getByTestId('simpan-biaya').click();
+  await A.getByText('Semua tersimpan').waitFor();
+  await A.screenshot({ path: path.join(SHOTS, '19-gaji-biaya.png'), fullPage: true });
+  await A.getByRole('radio', { name: 'Ringkasan HPP' }).click();
+  await A.getByTestId('biaya-tetap').filter({ hasText: 'Rp 9.925.000' }).waitFor();
+  await A.screenshot({ path: path.join(SHOTS, '20-ringkasan-hpp.png'), fullPage: true });
+  await A.getByRole('radio', { name: 'Laba rugi' }).click();
+  await A.getByTestId('beban-ops').filter({ hasText: 'Rp 500.000' }).waitFor();
+  assert(true, 'listrik Rp 500.000/bulan masuk beban operasional; biaya tetap 8.700.000 + 725.000 + 500.000 = Rp 9.925.000');
   // ---------- lupa kata sandi lewat email (SMTP palsu di localhost) ----------
   const net = await import('node:net');
   const mails = [];
@@ -525,6 +562,25 @@ try {
   for (let i = 0; i < 40 && !mailTo('nazra@example.com', 'CANCEL'); i++) await A.waitForTimeout(250);
   assert(mailTo('nazra@example.com', 'CANCEL'), 'pesanan dibatalkan → undangan dibatalkan (METHOD:CANCEL), acara hilang dari kalender perangkai');
   await A.keyboard.press('Escape');
+
+  // ---------- kalender event toko → Google Calendar owner + email tambahan ----------
+  await A.goto(BASE + '/#/kalender');
+  await A.getByTestId('gcal-buka').click();
+  await A.getByTestId('gcal').waitFor();
+  await A.getByTestId('gcal-aktif').check();
+  await A.getByTestId('gcal-email').first().fill('istri.owner@example.com');
+  await A.screenshot({ path: path.join(SHOTS, '23-google-calendar.png') });
+  await A.getByTestId('gcal-simpan').click();
+  for (let i = 0; i < 80 && !mailTo('istri.owner@example.com', 'REQUEST'); i++) await A.waitForTimeout(250);
+  const evMails = mails.filter((m) => m.includes('To: <istri.owner@example.com>') && m.includes('method=REQUEST'));
+  assert(evMails.length > 0 && evMails.every((m) => m.includes('filename="kalender-toko.ics"')), `kalender event dikirim ke email tambahan sebagai acara Google Calendar (${evMails.length} event)`);
+  const icsOf = (m) => Buffer.from(m.split('method=REQUEST')[1].split('\n\n')[1].split('--')[0].replace(/\s/g, ''), 'base64').toString();
+  for (let i = 0; i < 40 && !evMails.some((m) => /RRULE:FREQ=YEARLY/.test(icsOf(m))); i++) { await A.waitForTimeout(250); evMails.splice(0, evMails.length, ...mails.filter((m) => m.includes('To: <istri.owner@example.com>') && m.includes('method=REQUEST'))); }
+  const evIcs = icsOf(evMails[0]);
+  assert(/DTSTART;VALUE=DATE:\d{8}/.test(evIcs) && /TRIGGER:-P6DT16H/.test(evIcs) && /TRIGGER:-P2DT16H/.test(evIcs), 'acara sepanjang hari dengan alarm H-7 dan H-3 pukul 08.00');
+  assert(evMails.some((m) => /RRULE:FREQ=YEARLY/.test(icsOf(m)) && /National Girlfriend Day/.test(icsOf(m))), 'event rutin (National Girlfriend Day) memakai RRULE tahunan');
+  await A.getByTestId('gcal-buka').filter({ hasText: 'aktif' }).waitFor();
+  assert(true, 'tombol Google Calendar menampilkan status aktif');
   smtp.close();
   console.log('\nSEMUA UJI E2E LULUS');
 } catch (e) {

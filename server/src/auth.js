@@ -17,6 +17,30 @@ export function verifyPassword(pw, stored) {
   return crypto.timingSafeEqual(expected, got);
 }
 
+/**
+ * Salinan sandi yang bisa dibuka owner (fitur "Lihat sandi"). Hanya untuk sandi yang diatur owner sendiri
+ * (buat pengguna / tombol Sandi); sandi yang diganti pengguna lewat "Lupa kata sandi?" tidak pernah disimpan.
+ * AES-256-GCM, kunci = SHA-256(secret server + label), sehingga basis data saja tidak cukup untuk membukanya.
+ */
+const viewKey = (secret) => crypto.createHash('sha256').update(`${secret}:lihat-sandi-v1`).digest();
+export function sealPassword(secret, pw) {
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', viewKey(secret), iv);
+  const enc = Buffer.concat([c.update(String(pw), 'utf8'), c.final()]);
+  return `gcm$${b64u(iv)}$${b64u(enc)}$${b64u(c.getAuthTag())}`;
+}
+export function openPassword(secret, sealed) {
+  try {
+    const [alg, iv, enc, tag] = String(sealed || '').split('$');
+    if (alg !== 'gcm') return null;
+    const d = crypto.createDecipheriv('aes-256-gcm', viewKey(secret), Buffer.from(iv, 'base64url'));
+    d.setAuthTag(Buffer.from(tag, 'base64url'));
+    return Buffer.concat([d.update(Buffer.from(enc, 'base64url')), d.final()]).toString('utf8');
+  } catch {
+    return null; // secret server berganti atau data rusak
+  }
+}
+
 export function signToken(secret, payload, days) {
   const body = b64u(JSON.stringify({ ...payload, exp: Date.now() + days * 86400000 }));
   const sig = b64u(crypto.createHmac('sha256', secret).update(body).digest());

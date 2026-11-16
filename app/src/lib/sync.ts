@@ -133,6 +133,11 @@ class SyncEngine {
 
   private async pull() {
     let cursor = await getMeta<number>('cursor', 0);
+    // server menyaring koleksi khusus peran tertentu (mis. gaji = owner). Bila peran akun di perangkat ini berubah,
+    // tarik ulang dari awal agar data yang dulu disaring ikut masuk.
+    const role = getSession().user?.role || '';
+    if ((await getMeta<string>('pull_role', role)) !== role && cursor > 0) cursor = 0;
+    await setMeta('pull_role', role);
     for (;;) {
       const res = await api<{ changes: { c: string; id: string; seq: number; del: boolean; data: any }[]; cursor: number; more: boolean; head?: number; instanceId?: string }>(
         `/api/sync/pull?since=${cursor}&limit=${PULL_LIMIT}`, { timeout: 60000 },

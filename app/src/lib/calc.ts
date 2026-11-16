@@ -1,6 +1,7 @@
 // Perhitungan murni (tanpa I/O) supaya mudah diuji: total keranjang, laporan, shift.
-import type { CashMove, HppMethod, LoyaltyCfg, Order, OrderItem, Payment, Purchase, Shift, SurveyQuestion } from './types';
+import type { CashMove, CostItem, HppMethod, LoyaltyCfg, Order, OrderItem, Payment, Purchase, Shift, SurveyQuestion } from './types';
 import { answerOf } from './settings';
+import { allocCosts, type CostAlloc } from './costs';
 
 export interface CartTotals {
   subtotal: number; item_discount: number; order_discount: number; extra_fee: number; total: number; cost_total: number; qty: number;
@@ -38,6 +39,7 @@ export interface ReportInput {
   outletId?: string;
   purchases?: Purchase[]; // belanja bahan (owner)
   hppMethod?: HppMethod; // bawaan 'gabungan'
+  costs?: CostItem[]; // gaji & biaya operasional (owner)
 }
 
 export interface Report {
@@ -54,7 +56,14 @@ export interface Report {
   hppMethod: HppMethod;
   grossProfit: number; // netSales − HPP
   expenses: number; // beban (kas keluar kategori biaya)
-  netProfit: number; // grossProfit − expenses
+  labor: number; // gaji pegawai (alokasi periode)
+  benefits: number; // THR, bonus tahunan, bonus tambahan (alokasi periode)
+  opex: number; // biaya operasional: listrik, servis, lampu, jajan, dll (alokasi periode)
+  costs: CostAlloc; // rincian alokasi gaji & biaya
+  expensesTotal: number; // expenses + labor + benefits + opex
+  netProfit: number; // grossProfit − expensesTotal
+  buketQty: number; // jumlah item berjenis buket terjual
+  buketSales: number; // penjualan item buket (setelah potongan baris)
   paidForPeriodOrders: number; // pembayaran yang sudah masuk untuk transaksi periode ini
   outstandingForPeriodOrders: number; // sisa tagihan transaksi periode ini
   cashIn: { method: string; amount: number; count: number }[]; // arus kas masuk (basis kas)
@@ -81,6 +90,7 @@ export function buildReport(inp: ReportInput): Report {
 
   const r: Report = {
     count: orders.length, qty: 0, gross: 0, discount: 0, extraFee: 0, netSales: 0, cogs: 0, cogsProduct: 0, purchases: 0, purchaseCount: 0, hppMethod: inp.hppMethod || 'gabungan', grossProfit: 0, expenses: 0, netProfit: 0,
+    labor: 0, benefits: 0, opex: 0, expensesTotal: 0, costs: allocCosts([], inp.from, inp.to), buketQty: 0, buketSales: 0,
     paidForPeriodOrders: 0, outstandingForPeriodOrders: 0, cashIn: [], cashInTotal: 0, byProduct: [], byCashier: [], salesNoCost: 0, voided: all.length - orders.length,
   };
   const prod = new Map<string, Report['byProduct'][number]>();
@@ -105,6 +115,7 @@ export function buildReport(inp: ReportInput): Report {
       p.profit = p.sales - p.cogs;
       prod.set(k, p);
       if (!it.cost && (it.type || 'buket') !== 'jasa') r.salesNoCost += it.qty * it.price - (it.discount || 0);
+      if ((it.type || 'buket') === 'buket') { r.buketQty += it.qty; r.buketSales += it.qty * it.price - (it.discount || 0); }
     }
     const cn = o.cashier_name || '-';
     const c = cash.get(cn) || { name: cn, count: 0, sales: 0 };
@@ -126,7 +137,13 @@ export function buildReport(inp: ReportInput): Report {
     if (m.deleted || !outletOk(m) || !inRange(m.created_at, a, b)) continue;
     if (m.type === 'keluar' && m.biaya) r.expenses += m.amount;
   }
-  r.netProfit = r.grossProfit - r.expenses;
+  // gaji & biaya operasional: berlaku untuk seluruh toko (tidak dipecah per cabang)
+  r.costs = allocCosts(inp.costs || [], inp.from, inp.to, r.netSales);
+  r.labor = r.costs.gaji;
+  r.benefits = r.costs.tunjangan;
+  r.opex = r.costs.operasional;
+  r.expensesTotal = r.expenses + r.labor + r.benefits + r.opex;
+  r.netProfit = r.grossProfit - r.expensesTotal;
 
   const methods = new Map<string, { method: string; amount: number; count: number }>();
   for (const p of inp.payments) {

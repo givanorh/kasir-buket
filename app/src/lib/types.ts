@@ -234,11 +234,42 @@ export interface PrintJob extends Base {
   error?: string;
 }
 
+/** Frekuensi biaya: per bulan, tiap N bulan, per tahun, sekali (pada `date`), atau persen dari penjualan bersih periode. */
+export type CostFreq = 'bulan' | 'n_bulan' | 'tahun' | 'sekali' | 'persen';
+export type CostGroup = 'tunjangan' | 'utilitas' | 'perawatan' | 'operasional' | 'kas';
+export type StaffRole = 'perangkai' | 'admin' | 'lain';
+/**
+ * Gaji & biaya (koleksi `costs`, khusus owner: tulis dan baca).
+ * - `pegawai`: gaji per bulan, bonus tahunan, mulai/berhenti kerja (untuk THR proporsional dan alokasi gaji).
+ * - `thr`: aturan THR (pengali × gaji; masa kerja < 12 bulan proporsional).
+ * - `biaya`: biaya operasional dengan frekuensi; `pl: false` = tidak mengurangi laba (mis. uang standby laci).
+ */
+export interface CostItem extends Base {
+  kind: 'pegawai' | 'thr' | 'biaya';
+  name: string;
+  role?: StaffRole;
+  salary?: number;
+  bonus_year?: number;
+  start?: string;
+  end?: string;
+  mult?: number;
+  group?: CostGroup;
+  amount?: number;
+  freq?: CostFreq;
+  every?: number;
+  date?: string;
+  pct?: number;
+  pl?: boolean;
+  active?: boolean;
+  note?: string;
+  sort?: number;
+}
+
 export type Collection =
   | 'outlets' | 'staff' | 'devices' | 'settings' | 'categories' | 'products' | 'customers'
-  | 'orders' | 'payments' | 'stock_moves' | 'shifts' | 'cash_moves' | 'print_jobs' | 'purchases' | 'events';
+  | 'orders' | 'payments' | 'stock_moves' | 'shifts' | 'cash_moves' | 'print_jobs' | 'purchases' | 'events' | 'costs';
 
 export const COLLECTIONS: Collection[] = [
   'outlets', 'staff', 'devices', 'settings', 'categories', 'products', 'customers',
-  'orders', 'payments', 'stock_moves', 'shifts', 'cash_moves', 'print_jobs', 'purchases', 'events',
+  'orders', 'payments', 'stock_moves', 'shifts', 'cash_moves', 'print_jobs', 'purchases', 'events', 'costs',
 ];

@@ -1,6 +1,6 @@
 {
   "name": "kasir-buket-server",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "private": true,
   "type": "module",
   "description": "Server sinkron Kasir Buket: auth, sinkron push/pull, realtime SSE, backup harian, penyaji aplikasi web.",

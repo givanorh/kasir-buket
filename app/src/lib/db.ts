@@ -3,7 +3,7 @@
 import Dexie, { type Table } from 'dexie';
 import { COLLECTIONS } from './types';
 import type {
-  CalEvent, CashMove, Category, Customer, Device, Order, Outlet, Payment, PrintJob, Product, Purchase, Settings, Shift, Staff, StockMove,
+  CalEvent, CashMove, Category, CostItem, Customer, Device, Order, Outlet, Payment, PrintJob, Product, Purchase, Settings, Shift, Staff, StockMove,
 } from './types';
 
 export interface OutboxEntry { seq?: number; c: string; id: string; patch: Record<string, unknown>; del?: boolean; ts: number }
@@ -27,6 +27,7 @@ export class KasirDB extends Dexie {
   print_jobs!: Table<PrintJob, string>;
   purchases!: Table<Purchase, string>;
   events!: Table<CalEvent, string>;
+  costs!: Table<CostItem, string>;
 
   constructor(name = 'kasir-buket') {
     super(name);
@@ -49,6 +50,8 @@ export class KasirDB extends Dexie {
     });
     // v1.4: belanja bahan & kalender event (owner)
     this.version(2).stores({ purchases: 'id, date', events: 'id, date' });
+    // v1.6: gaji & biaya operasional (owner; server hanya mengirimnya ke perangkat owner)
+    this.version(3).stores({ costs: 'id, kind' });
   }
 }
 

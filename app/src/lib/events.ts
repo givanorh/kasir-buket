@@ -4,11 +4,16 @@
 import type { CalEvent, EventKind, Order } from './types';
 
 export const KIND_LABEL: Record<EventKind, string> = {
-  libur: 'Libur nasional', momen: 'Momen buket', musim: 'Musim', lokal: 'Lokal', data: 'Lonjakan data', toko: 'Toko',
+  libur: 'Libur Nasional', momen: 'Puncak Penjualan', musim: 'Puncak Penjualan', lokal: 'Lokal', data: 'Lonjakan data', toko: 'Toko',
 };
+/** Kategori yang bisa dipilih (v1.6: "Musim" dihapus; event lama berjenis musim dipindah lewat `migrateMusim`). */
+export const KIND_LIST: EventKind[] = ['libur', 'lokal', 'momen', 'data', 'toko'];
 
 type Seed = Omit<CalEvent, 'id'> & { id: string };
 const e = (id: string, date: string, name: string, kind: EventKind, note = '', end?: string): Seed => ({ id: `ev26-${id}`, date, end, name, kind, note });
+
+const LEBARAN_OLD = '11 Mar 3,8×, 12 Mar 3,1×, 16 Mar 2,2×, 19 Mar Rp 3,04 jt (2,9×, 6 buket uang). Siapkan uang pecahan baru & mika.';
+const LEBARAN_NOTE = `${LEBARAN_OLD} Lonjakan buket uang inilah yang membuat bulan Ramadan tampak ramai; di luar 11–19 Mar penjualan Ramadan cenderung sepi.`;
 
 export const DEFAULT_EVENTS_2026: Seed[] = [
   e('tahunbaru', '2026-01-01', 'Tahun Baru Masehi', 'libur', 'Bukan hari ramai: 1 Jan 2026 Rp 0,72 jt (0,8×).'),
@@ -16,9 +21,8 @@ export const DEFAULT_EVENTS_2026: Seed[] = [
   e('isramiraj', '2026-01-16', "Isra Mi'raj Nabi Muhammad SAW", 'libur'),
   e('valentine', '2026-02-12', 'Valentine', 'momen', 'Puncak terbesar tahun ini. 13 Feb Rp 11,82 jt (12,8×, 92 trx), 14 Feb Rp 19,68 jt (21,4×, 160 trx), 15 Feb Rp 4,73 jt (5,9×). Jumlah 12–15 Feb Rp 38,50 jt. Produk dominan buket cokelat: siapkan cokelat & boneka sejak awal Februari.', '2026-02-15'),
   e('imlek', '2026-02-16', 'Imlek 2577 (cuti bersama 16 Feb, libur 17 Feb)', 'libur', '17 Feb Rp 3,73 jt (4,1×), masih ekor Valentine (buket cokelat).', '2026-02-17'),
-  e('ramadan', '2026-02-19', 'Ramadan 1447 H (perkiraan)', 'musim', 'Cenderung sepi: rata-rata Rp 0,97 jt/hari (0,89× 28 hari sebelumnya). Awal puasa menunggu sidang isbat.', '2026-03-20'),
   e('perempuan', '2026-03-08', 'Hari Perempuan Internasional', 'momen', '8 Mar (Minggu) toko tutup; 9 Mar Rp 2,76 jt (4,0×).'),
-  e('lebaran-buketuang', '2026-03-11', 'Menjelang Idul Fitri: buket uang', 'musim', '11 Mar 3,8×, 12 Mar 3,1×, 16 Mar 2,2×, 19 Mar Rp 3,04 jt (2,9×, 6 buket uang). Siapkan uang pecahan baru & mika.', '2026-03-19'),
+  e('lebaran-buketuang', '2026-03-11', 'Menjelang Idul Fitri: buket uang', 'momen', LEBARAN_NOTE, '2026-03-19'),
   e('nyepi', '2026-03-18', 'Nyepi (cuti bersama 18 Mar, libur 19 Mar)', 'libur', '', '2026-03-19'),
   e('idulfitri', '2026-03-20', 'Idul Fitri 1447 H & cuti bersama', 'libur', 'Libur 21–22 Mar, cuti bersama 20, 23, 24 Mar. Toko tutup 20–21 Mar.', '2026-03-24'),
   e('wafatyesus', '2026-04-03', 'Wafat Yesus Kristus', 'libur'),
@@ -26,13 +30,13 @@ export const DEFAULT_EVENTS_2026: Seed[] = [
   e('kartini', '2026-04-18', 'Hari Kartini (21 Apr)', 'momen', '18 Apr (Sab) Rp 4,69 jt (3,1×, 33 trx), 21 Apr Rp 2,83 jt (1,8×). Pembelian untuk acara sekolah jatuh di akhir pekan sebelumnya.', '2026-04-21'),
   e('buruh', '2026-05-01', 'Hari Buruh Internasional', 'libur'),
   e('hardiknas', '2026-05-02', 'Hari Pendidikan Nasional', 'momen', 'Tidak ada lonjakan (0,3×).'),
-  e('wisuda-mei', '2026-05-04', 'Musim kelulusan & wisuda sekolah', 'musim', 'Rata-rata Rp 2,71 jt/hari (1,75× 28 hari sebelumnya), jumlah Rp 75,9 jt. Puncak 5 Mei Rp 6,13 jt dan 25 Mei Rp 6,15 jt. Pola sama tahun 2025 (1,82×). Produk: thumbelina, edelweiss L, boneka wisuda.', '2026-05-31'),
+  e('wisuda-mei', '2026-05-04', 'Kelulusan & wisuda sekolah', 'momen', 'Rata-rata Rp 2,71 jt/hari (1,75× 28 hari sebelumnya), jumlah Rp 75,9 jt. Puncak 5 Mei Rp 6,13 jt dan 25 Mei Rp 6,15 jt. Pola sama tahun 2025 (1,82×). Produk: thumbelina, edelweiss L, boneka wisuda.', '2026-05-31'),
   e('ibu-internasional', '2026-05-10', 'Hari Ibu Internasional (Mother’s Day)', 'momen', '10 Mei 2026 Minggu (tutup); 9 Mei Rp 2,53 jt (1,1×). Tahun 2025: 10 Mei Rp 4,76 jt (3,7×).'),
   e('kenaikan', '2026-05-14', 'Kenaikan Yesus Kristus (cuti bersama 15 Mei)', 'libur', '', '2026-05-15'),
   e('iduladha', '2026-05-27', 'Idul Adha 1447 H (cuti bersama 28 Mei)', 'libur', '', '2026-05-28'),
   e('waisak', '2026-05-31', 'Waisak 2570 BE', 'libur'),
   e('pancasila', '2026-06-01', 'Hari Lahir Pancasila', 'libur'),
-  e('wisuda-juni', '2026-06-01', 'Perpisahan & wisuda TK–SD', 'musim', 'Rata-rata Rp 1,96 jt/hari: di bawah Mei (0,83×) tetapi di atas median tahunan Rp 1,67 jt. Puncak 15 Jun Rp 3,87 jt (2,0×) dan 25 Jun Rp 3,20 jt (2,2×).', '2026-06-27'),
+  e('wisuda-juni', '2026-06-01', 'Perpisahan & wisuda TK–SD', 'momen', 'Rata-rata Rp 1,96 jt/hari: di bawah Mei (0,83×) tetapi di atas median tahunan Rp 1,67 jt. Puncak 15 Jun Rp 3,87 jt (2,0×) dan 25 Jun Rp 3,20 jt (2,2×).', '2026-06-27'),
   e('tahunbaruislam', '2026-06-16', 'Tahun Baru Islam 1448 H', 'libur'),
   e('anak', '2026-07-23', 'Hari Anak Nasional', 'momen', 'Tidak ada lonjakan (0,8×).'),
   e('awal-agustus', '2026-07-31', 'Puncak awal Agustus (penyebab belum diketahui)', 'data', 'Lonjakan terbesar kedua: 31 Jul Rp 5,80 jt (2,4×), 1 Agu Rp 21,85 jt (8,8×, 139 trx), 2 Agu Rp 6,59 jt (2,6×); jumlah Rp 34,24 jt. Berulang dari 2025: 1 Agu Rp 4,07 jt (5,8×), 4 Agu (3,8×). Kemungkinan wisuda/pelepasan sekolah atau kampus. Ganti nama bila penyebabnya diketahui.', '2026-08-02'),
@@ -160,4 +164,34 @@ export function suggestRecurring(e: Pick<CalEvent, 'date' | 'end' | 'name'>): { 
     if (hit) return { name: `${hit} (${Number(k.slice(8))} ${BLN_PENDEK[Number(k.slice(5, 7)) - 1]})`, day: k };
   }
   return { name: e.name.replace(/^(puncak|lonjakan)\s+/i, '').replace(/\s*\(penyebab belum diketahui\)/i, '') };
+}
+
+/**
+ * Migrasi v1.6: kategori "Musim" dihapus. Ramadan (ev26-ramadan) dihapus karena bukan momen ramai; event musim lain
+ * (buket uang menjelang Lebaran, kelulusan & wisuda) menjadi "Puncak Penjualan". Idempoten: hanya menyentuh event berjenis musim.
+ */
+export function migrateMusim(events: CalEvent[]): { id: string; patch: Partial<CalEvent> }[] {
+  const out: { id: string; patch: Partial<CalEvent> }[] = [];
+  for (const ev of events) {
+    if (ev.deleted || ev.kind !== 'musim') continue;
+    if (ev.id === 'ev26-ramadan') { out.push({ id: ev.id, patch: { deleted: true } }); continue; }
+    const patch: Partial<CalEvent> = { kind: 'momen' };
+    if (ev.id === 'ev26-lebaran-buketuang' && ev.note === LEBARAN_OLD) patch.note = LEBARAN_NOTE;
+    if (ev.id === 'ev26-wisuda-mei' && ev.name === 'Musim kelulusan & wisuda sekolah') patch.name = 'Kelulusan & wisuda sekolah';
+    out.push({ id: ev.id, patch });
+  }
+  return out;
+}
+
+/** Nilai pengurutan "omzet": omzet tahun berjalan bila sudah ada datanya, selain itu omzet tanggal yang sama tahun lalu. */
+export function omzetRank<T extends Pick<CalEvent, 'date' | 'end'>>(evs: T[], dl: Daily) {
+  const minus = (k?: string) => (k ? `${Number(k.slice(0, 4)) - 1}${k.slice(4)}` : k);
+  return evs
+    .map((e) => {
+      const s = eventStat(e, dl);
+      if (s.covered) return { e, sales: s.sales, count: s.count, lastYear: false };
+      const l = eventStat({ date: minus(e.date)!, end: minus(e.end) }, dl);
+      return { e, sales: l.covered ? l.sales : 0, count: l.covered ? l.count : 0, lastYear: l.covered };
+    })
+    .sort((a, b) => b.sales - a.sales || a.e.date.localeCompare(b.e.date));
 }
