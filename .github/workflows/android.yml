@@ -1,5 +1,11 @@
-# Membangun APK Kasir Buket di GitHub (gratis untuk pemakaian wajar).
-# Hasil: tab Actions › run terbaru › Artifacts › "kasir-buket-apk".
+# Membangun APK Kasir Buket di GitHub (gratis untuk pemakaian wajar) lalu menerbitkannya sebagai GitHub Release.
+# Hasil: halaman Releases › "Kasir Buket v<versi>" › Assets › kasir-buket-v<versi>.apk
+#        (juga tab Actions › run terbaru › Artifacts › "kasir-buket-apk").
+# Versi = "version" di app/package.json. Push berikutnya dengan versi sama mengganti APK di rilis yang sama.
+#
+# Alamat server bawaan APK: variabel repositori KB_SERVER_URL (Settings › Secrets and variables › Actions › Variables).
+# Bila tidak diisi dipakai tunnel ngrok toko (sementara, sampai server pindah ke VPS). Saat pindah ke VPS cukup isi
+# KB_SERVER_URL dengan alamat VPS lalu jalankan ulang workflow: perangkat yang memakai alamat bawaan lama ikut pindah.
 name: Build APK Android
 
 on:
@@ -7,6 +13,9 @@ on:
     branches: [main]
     paths: ['app/**', '.github/workflows/android.yml']
   workflow_dispatch:
+
+env:
+  KB_SERVER_URL: ${{ vars.KB_SERVER_URL || 'https://daydream-vowel-snaking.ngrok-free.dev' }}
 
 jobs:
   apk:
@@ -41,8 +50,13 @@ jobs:
       - uses: android-actions/setup-android@v3
         if: steps.sdk.outputs.found != 'true'
 
+      - name: Versi aplikasi
+        run: echo "KB_VERSION=$(jq -r .version app/package.json)" >> "$GITHUB_ENV"
+
       - name: Uji & bangun aplikasi web
         working-directory: app
+        env:
+          VITE_DEFAULT_SERVER: ${{ env.KB_SERVER_URL }}
         run: |
           npm ci
           npm test
@@ -53,10 +67,11 @@ jobs:
         working-directory: app/android
         env:
           KB_VERSION_CODE: ${{ github.run_number }}
+          KB_VERSION_NAME: ${{ env.KB_VERSION }}
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
-          mv app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/kasir-buket-${{ github.run_number }}.apk
+          mv app/build/outputs/apk/debug/app-debug.apk "app/build/outputs/apk/debug/kasir-buket-v${KB_VERSION}.apk"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -74,3 +89,45 @@ jobs:
       - name: Uji server
         working-directory: server
         run: npm test
+
+  # Terbitkan ke GitHub Releases setelah uji aplikasi dan server lulus (hanya dari branch main).
+  release:
+    needs: [apk, server-test]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kasir-buket-apk
+          path: rilis
+
+      - name: Terbitkan GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(jq -r .version app/package.json)
+          TAG="v$VER"
+          APK="rilis/kasir-buket-v$VER.apk"
+          test -f "$APK"
+          SHORT=$(git rev-parse --short HEAD)
+          cat > catatan.md <<EOF
+          APK Android Kasir Buket $TAG (build #${{ github.run_number }}, commit $SHORT).
+
+          Cara pasang:
+          1. Unduh kasir-buket-v$VER.apk di bagian Assets di bawah.
+          2. Buka berkasnya di HP/tablet. Bila diminta, izinkan "Instal aplikasi tidak dikenal" untuk peramban atau File Manager.
+          3. Buka Kasir Buket, alamat server toko sudah terisi otomatis, lalu masuk dengan akun masing-masing.
+
+          Syarat: komputer server toko menyala dan tunnel ngrok aktif (sementara, sampai server pindah ke VPS).
+          APK rilis berikutnya bisa dipasang menimpa versi ini tanpa menghapus data, karena ditandatangani kunci yang sama.
+          EOF
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber
+            gh release edit "$TAG" --notes-file catatan.md --latest
+          else
+            gh release create "$TAG" "$APK" --target "$GITHUB_SHA" --title "Kasir Buket $TAG" --notes-file catatan.md --latest
+          fi
