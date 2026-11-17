@@ -5,13 +5,14 @@ import { addDays, dayKey, fmtDate, fmtShort, fmtTime, rp } from '../lib/format';
 import { getDeviceConfig, setProductionStatus, type DeviceConfig } from '../lib/store';
 import { retryJob } from '../lib/print';
 import { Badge, Empty, Seg } from '../components/ui';
-import { storeCfg } from '../lib/settings';
 import { Icon } from '../components/icons';
-import { OrderDetail, PelunasanModal } from '../components/Order';
-import { canSetStatus } from '../lib/rules';
+import { AssignFloristModal, OrderDetail, PelunasanModal } from '../components/Order';
+import { assigneeOf, canSetStatus, needsFlorist, rolesOf, type Florist } from '../lib/rules';
+import { useFlorists } from '../lib/staff';
+import type { SessionUser } from '../lib/session';
 import { CancelRequests } from '../components/Alerts';
 import { useSession } from '../lib/session';
-import type { Order, Payment, ProductionStatus, Role } from '../lib/types';
+import type { Order, Payment, ProductionStatus } from '../lib/types';
 
 const COLS: { st: ProductionStatus; label: string; next: ProductionStatus; action: string }[] = [
   { st: 'antri', label: 'Antri', next: 'dirangkai', action: 'Mulai rangkai' },
@@ -27,18 +28,20 @@ const sumPaid = (ps: Payment[]) => {
 
 /**
  * Papan ruang perangkai: urut jadwal, terlambat ditandai merah.
- * Antri → Dirangkai → Siap dikonfirmasi perangkai; Siap → Selesai (sudah diambil) dikonfirmasi kasir setelah lunas.
+ * Antri → Dirangkai → Siap dikonfirmasi perangkai yang ditunjuk; Siap → Selesai (sudah diambil) dikonfirmasi kasir setelah lunas.
+ * Kartu antri tanpa perangkai diberi peringatan dan tombol "Tunjuk perangkai" (Admin/owner).
  */
 export default function Produksi() {
   const [when, setWhen] = useState<'aktif' | 'hari' | 'besok'>(() => (location.hash.includes('?besok') ? 'besok' : 'aktif'));
-  const role = useSession().user?.role;
+  const me = useSession().user;
+  const role = me?.role;
   const isOwner = role === 'owner';
   const money = role !== 'perangkai';
   const [open, setOpen] = useState<string | null>(null);
   const [payFor, setPayFor] = useState<string | null>(null);
+  const [assignFor, setAssignFor] = useState<string | null>(null);
   const [flor, setFlor] = useState('');
-  const settings = useLiveQuery(() => db.settings.get('toko'));
-  const florists = storeCfg(settings).florists;
+  const florists = useFlorists();
   const [cfg, setCfg] = useState<DeviceConfig | null>(null);
   const [, tick] = useState(0);
   useEffect(() => {
@@ -65,6 +68,7 @@ export default function Produksi() {
   const jobs = useLiveQuery(() => db.print_jobs.where('status').anyOf('pending', 'printing', 'error').toArray(), []) || [];
   const sel = useLiveQuery(() => (open ? db.orders.get(open) : undefined), [open]);
   const payOrder = useLiveQuery(() => (payFor ? db.orders.get(payFor) : undefined), [payFor]);
+  const assignOrder = useLiveQuery(() => (assignFor ? db.orders.get(assignFor) : undefined), [assignFor]);
 
   const orders = board?.os || [];
   const list = useMemo(() => {
@@ -72,10 +76,10 @@ export default function Produksi() {
     const tomorrow = dayKey(addDays(new Date(), 1));
     return orders
       .filter((o) => !o.void && !o.deleted)
-      .filter((o) => !flor || (flor === '-' ? !o.florist : o.florist === flor))
+      .filter((o) => !flor || (flor === '-' ? assigneeOf(o, florists) === null : (o.florist_id ? o.florist_id === flor : o.florist === flor || assigneeOf(o, florists) === flor)))
       .filter((o) => when === 'aktif' || dayKey(o.due_at || o.created_at!) === (when === 'hari' ? today : tomorrow))
       .sort((a, b) => (a.due_at || a.created_at || '').localeCompare(b.due_at || b.created_at || ''));
-  }, [orders, when, flor]);
+  }, [orders, when, flor, florists]);
   const station = cfg?.stationTargets || [];
   const myJobs = jobs.filter((j) => station.includes(j.target));
   const dueOf = (o: Order) => Math.max(0, o.total - (board?.paid.get(o.id) || 0));
@@ -87,7 +91,7 @@ export default function Produksi() {
         <Seg value={when} onChange={setWhen} options={[{ value: 'aktif', label: 'Semua aktif' }, { value: 'hari', label: 'Hari ini' }, { value: 'besok', label: 'Besok' }]} />
         <div className="chips small" data-testid="florist-filter">
           <button className={!flor ? 'on' : ''} onClick={() => setFlor('')}>Semua perangkai</button>
-          {florists.map((n) => <button key={n} className={flor === n ? 'on' : ''} onClick={() => setFlor(n)}>{n}</button>)}
+          {florists.map((f) => <button key={f.id || f.name} className={flor === (f.id || f.name) ? 'on' : ''} onClick={() => setFlor(f.id || f.name)}>{f.name}</button>)}
           <button className={flor === '-' ? 'on' : ''} onClick={() => setFlor('-')}>Belum ditunjuk</button>
         </div>
         {station.length > 0 && (
@@ -103,7 +107,7 @@ export default function Produksi() {
           return (
             <div key={c.st} className="bcol">
               <div className="bhead">{c.label} <span>{xs.reduce((s, o) => s + o.items.reduce((a, i) => a + i.qty, 0), 0)} item</span></div>
-              {xs.map((o) => <Card key={o.id} o={o} col={c} role={role} due={board ? dueOf(o) : null} onOpen={() => setOpen(o.id)} onPay={() => setPayFor(o.id)} />)}
+              {xs.map((o) => <Card key={o.id} o={o} col={c} me={me} florists={florists} due={board ? dueOf(o) : null} onOpen={() => setOpen(o.id)} onPay={() => setPayFor(o.id)} onAssign={() => setAssignFor(o.id)} />)}
               {!xs.length && <Empty>—</Empty>}
             </div>
           );
@@ -126,19 +130,23 @@ export default function Produksi() {
       )}
       {sel && <OrderDetail order={sel} onClose={() => setOpen(null)} />}
       {payOrder && <PelunasanModal order={payOrder} onClose={() => setPayFor(null)} />}
+      {assignOrder && <AssignFloristModal order={assignOrder} onClose={() => setAssignFor(null)} />}
     </div>
   );
 }
 
-const ROLE_HINT: Record<string, string> = {
-  dirangkai: 'Dikonfirmasi perangkai',
-  siap: 'Dikonfirmasi perangkai',
-  selesai: 'Dikonfirmasi kasir setelah pesanan diambil/diantar',
-};
-
-function Card({ o, col, role, due, onOpen, onPay }: {
-  o: Order; col: (typeof COLS)[number]; role: Role | undefined; due: number | null; onOpen: () => void; onPay: () => void;
+function Card({ o, col, me, florists, due, onOpen, onPay, onAssign }: {
+  o: Order; col: (typeof COLS)[number]; me: SessionUser | null; florists: Florist[]; due: number | null; onOpen: () => void; onPay: () => void; onAssign: () => void;
 }) {
+  const role = me?.role;
+  const roles = rolesOf(me);
+  const assignee = assigneeOf(o, florists);
+  const unassigned = assignee === null && needsFlorist(o);
+  const canAssign = roles.includes('owner') || roles.includes('kasir');
+  const assignedName = assignee ? florists.find((f) => f.id === assignee)?.name || o.florist : o.florist;
+  const hint = col.next === 'selesai' ? 'Dikonfirmasi Admin setelah pesanan diambil/diantar'
+    : unassigned ? 'Tunjuk perangkai dulu' : `Hanya ${assignedName || 'perangkai yang ditunjuk'} yang bisa menekan tombol ini`;
+  const mine = !!assignee && assignee === me?.id;
   const at = o.due_at ? new Date(o.due_at) : null;
   const late = at && at.getTime() < Date.now() && o.production_status !== 'siap';
   const soon = at && !late && at.getTime() - Date.now() < 2 * 3600e3;
@@ -146,9 +154,10 @@ function Card({ o, col, role, due, onOpen, onPay }: {
   const money = role !== 'perangkai';
   // Siap + masih ada sisa tagihan (DP / bayar nanti): kasir menagih pelunasan dulu, baru "Sudah diambil"
   const needPay = money && col.st === 'siap' && due !== null && due > 0;
-  const allowed = due !== null && canSetStatus(role, o, col.next, due);
+  const allowed = due !== null && canSetStatus(me, o, col.next, due, assignee);
   return (
-    <div className={`bcard ${late ? 'late' : soon ? 'soon' : h1 ? 'h1' : ''}`} data-testid="prod-card">
+    <div className={`bcard ${late ? 'late' : soon ? 'soon' : h1 ? 'h1' : ''} ${unassigned ? 'unassigned' : ''} ${mine ? 'mine' : ''}`} data-testid="prod-card">
+      {unassigned && <div className="bc-flag red" data-testid="belum-ditunjuk">Perangkai belum ditunjuk</div>}
       {h1 && <div className="bc-flag">H-1: untuk besok, belum selesai</div>}
       {o.cancel_request?.status === 'pending' && <div className="bc-flag red">Pengajuan batal menunggu owner</div>}
       <div className="bc-top" onClick={onOpen}>
@@ -160,12 +169,13 @@ function Card({ o, col, role, due, onOpen, onPay }: {
         {o.notes && <div className="bc-note"><b>Catatan:</b> {o.notes}</div>}
         {o.card_message && <div className="bc-note"><b>Kartu:</b> “{o.card_message}”</div>}
         <div className="muted">{o.customer_name || 'Umum'}</div>
-        {o.florist && <div className="bc-who">Perangkai: {o.florist}</div>}
+        {o.florist && <div className="bc-who">Perangkai: {assignedName}{mine ? ' (Anda)' : ''}</div>}
         {money && due !== null && due > 0 && <div className="bc-pay"><Badge tone={due < o.total ? 'amber' : 'red'}>{due < o.total ? 'DP' : 'Belum bayar'}</Badge> sisa {rp(due)}</div>}
       </div>
+      {unassigned && canAssign && <button className="btn" onClick={onAssign} data-testid="btn-tunjuk">Tunjuk perangkai</button>}
       {needPay
         ? <button className="btn primary" onClick={onPay} data-testid="btn-bayar-pelunasan">Bayar pelunasan · {rp(due!)}</button>
-        : <button className="btn primary" disabled={!allowed} title={allowed ? undefined : ROLE_HINT[col.next]} onClick={() => setProductionStatus(o, col.next)} data-testid={`act-${col.st}`}>{col.action}</button>}
+        : <button className="btn primary" disabled={!allowed} title={allowed ? undefined : hint} onClick={() => setProductionStatus(o, col.next)} data-testid={`act-${col.st}`}>{col.action}</button>}
     </div>
   );
 }

@@ -3,13 +3,14 @@
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../lib/db';
-import { addPayment, decideCancel, requestCancel, save, setProductionStatus, voidOrder, withdrawCancel } from '../lib/store';
+import { addPayment, decideCancel, requestCancel, setProductionStatus, voidOrder, withdrawCancel } from '../lib/store';
 import { fmtDateTime, fmtShort, num, rp } from '../lib/format';
 import { printOrder } from '../lib/print';
 import { useSession } from '../lib/session';
 import { storeCfg } from '../lib/settings';
 import { Badge, Field, Modal, MoneyInput, toast } from './ui';
-import { canSetStatus } from '../lib/rules';
+import { assigneeOf, canSetStatus, matchFlorist, needsFlorist, rolesOf, type Florist } from '../lib/rules';
+import { assignFlorist, useFlorists } from '../lib/staff';
 import type { Order, Payment, ProductionStatus } from '../lib/types';
 
 export const PROD_LABEL: Record<ProductionStatus, string> = { antri: 'Antri', dirangkai: 'Dirangkai', siap: 'Siap', selesai: 'Selesai', batal: 'Batal' };
@@ -104,9 +105,11 @@ function CancelModal({ mode, order, onClose, onSubmit }: { mode: 'void' | 'reque
 export function OrderDetail({ order, onClose }: { order: Order; onClose: () => void }) {
   const s = useSession();
   const role = s.user?.role;
+  const roles = rolesOf(s.user);
+  const florists = useFlorists();
+  const assignee = assigneeOf(order, florists);
   const paymentsQ = useLiveQuery(() => db.payments.where('order_id').equals(order.id).toArray(), [order.id]);
   const pays = livePays(paymentsQ || []);
-  const settings = useLiveQuery(() => db.settings.get('toko'));
   const paid = paidSum(pays);
   const due = Math.max(0, order.total - paid);
   const canEdit = role !== 'perangkai';
@@ -131,8 +134,13 @@ export function OrderDetail({ order, onClose }: { order: Order; onClose: () => v
     const r = await printOrder(order, [t], { copyLabel: t === 'kasir' ? 'CETAK ULANG' : undefined });
     toast(r[0].ok ? (r[0].mode === 'relay' ? 'Dikirim ke stasiun cetak' : 'Dikirim ke printer') : `Gagal: ${r[0].error}`, r[0].ok ? 'ok' : 'err');
   }
-  const statusHint = role === 'kasir' ? 'Antri → Dirangkai → Siap dikonfirmasi perangkai. Kasir menandai Selesai setelah lunas.'
-    : role === 'perangkai' ? 'Selesai (sudah diambil) dikonfirmasi kasir setelah pelunasan.' : '';
+  const assignedName = assignee ? florists.find((f) => f.id === assignee)?.name || order.florist : order.florist;
+  const statusHint = assignee === null && needsFlorist(order) ? 'Perangkai belum ditunjuk: Antri → Dirangkai → Siap baru bisa dikonfirmasi setelah perangkai ditunjuk.'
+    : `Antri → Dirangkai → Siap dikonfirmasi ${assignedName ? `oleh ${assignedName}` : 'perangkai yang ditunjuk'}. Selesai (sudah diambil) dikonfirmasi Admin setelah lunas.`;
+  // pilihan perangkai: akun aktif + nama lama yang masih tercatat di pesanan
+  const options: Florist[] = order.florist && !florists.some((f) => (order.florist_id ? f.id === order.florist_id : f.name === order.florist))
+    ? [...florists, { id: order.florist_id || undefined, name: order.florist }] : florists;
+  const isOn = (f: Florist) => (order.florist_id ? f.id === order.florist_id : !!order.florist && (f.name === order.florist || matchFlorist(order.florist, [f]) === f));
 
   return (
     <Modal title={`Pesanan ${order.no}`} onClose={onClose} wide>
@@ -165,19 +173,24 @@ export function OrderDetail({ order, onClose }: { order: Order; onClose: () => v
               {due > 0 && !order.void && <button className="btn primary" onClick={() => setPayOpen(true)} data-testid="detail-bayar-pelunasan">Bayar pelunasan · {rp(due)}</button>}
             </>
           )}
-          <h3>Perangkai</h3>
-          <div className="chips small">
-            {[...new Set([...storeCfg(settings).florists, ...(order.florist ? [order.florist] : [])])].map((n) => (
-              <button key={n} disabled={!canEdit || order.void} className={order.florist === n ? 'on' : ''} onClick={() => save<Order>('orders', order.id, { florist: order.florist === n ? '' : n })}>{n}</button>
-            ))}
-          </div>
+          {order.fulfillment !== 'sekarang' && (
+            <>
+              <h3>Perangkai</h3>
+              {assignee === null && needsFlorist(order) && <div className="note warn small" data-testid="detail-belum-ditunjuk">Perangkai belum ditunjuk.</div>}
+              <div className="chips small" data-testid="detail-florists">
+                {options.map((f) => (
+                  <button key={f.id || f.name} disabled={!canEdit || order.void} className={isOn(f) ? 'on' : ''} onClick={() => assignFlorist(order, isOn(f) ? null : f)}>{f.name}</button>
+                ))}
+              </div>
+            </>
+          )}
           <h3>Status produksi</h3>
           <div className="chips" data-testid="status-chips">
             {(['antri', 'dirangkai', 'siap', 'selesai'] as ProductionStatus[]).map((st) => (
-              <button key={st} disabled={!canSetStatus(role, order, st, due)} className={order.production_status === st ? 'on' : ''} onClick={() => setProductionStatus(order, st)}>{PROD_LABEL[st]}</button>
+              <button key={st} disabled={!canSetStatus(s.user, order, st, due, assignee)} className={order.production_status === st ? 'on' : ''} onClick={() => setProductionStatus(order, st)}>{PROD_LABEL[st]}</button>
             ))}
           </div>
-          {statusHint && <p className="muted small">{statusHint}{role !== 'perangkai' && due > 0 && order.production_status === 'siap' ? ' Pesanan belum lunas: bayar pelunasan dulu.' : ''}</p>}
+          <p className="muted small">{statusHint}{roles.some((r) => r !== 'perangkai') && due > 0 && order.production_status === 'siap' ? ' Pesanan belum lunas: bayar pelunasan dulu.' : ''}</p>
           <h3>Cetak</h3>
           <div className="chips">
             {canEdit && <button onClick={() => reprint('kasir')}>Struk</button>}
@@ -205,6 +218,28 @@ export function OrderDetail({ order, onClose }: { order: Order; onClose: () => v
       </div>
       {cancelMode && <CancelModal mode={cancelMode} order={order} onClose={() => setCancelMode(null)} onSubmit={submitCancel} />}
       {payOpen && <PelunasanModal order={order} onClose={() => setPayOpen(false)} />}
+    </Modal>
+  );
+}
+
+/** Tunjuk perangkai dari papan Produksi (Admin/owner). Hanya perangkai yang ditunjuk yang bisa memulai rangkai. */
+export function AssignFloristModal({ order, onClose }: { order: Order; onClose: () => void }) {
+  const florists = useFlorists();
+  const cur = assigneeOf(order, florists);
+  async function pick(f: Florist) {
+    await assignFlorist(order, f);
+    toast(`${f.name} ditunjuk merangkai #${order.no.split('-').pop()}. Hanya ${f.name} yang bisa menekan Mulai rangkai.`);
+    onClose();
+  }
+  return (
+    <Modal title={`Tunjuk perangkai #${order.no.split('-').pop()}`} onClose={onClose}>
+      <div className="stack" data-testid="tunjuk-modal">
+        <p className="muted small">{order.items.map((i) => `${i.qty}× ${i.name}`).join(', ')} · {order.fulfillment === 'antar' ? 'antar' : 'ambil'} {fmtShort(order.due_at)}</p>
+        <div className="chips" data-testid="tunjuk-pilihan">
+          {florists.map((f) => <button key={f.id || f.name} className={cur && f.id === cur ? 'on' : ''} onClick={() => pick(f)}>{f.name}</button>)}
+        </div>
+        {!florists.some((f) => f.id) && <p className="muted small">Belum ada akun berperan Perangkai. Buat di Pengaturan › Staff agar penunjukan terkunci ke akun perangkai.</p>}
+      </div>
     </Modal>
   );
 }

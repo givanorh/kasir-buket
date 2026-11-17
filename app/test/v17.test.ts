@@ -7,23 +7,26 @@ import type { Order, Payment } from '../src/lib/types';
 
 const o = (st: Order['production_status'], extra: Partial<Order> = {}) => ({ void: false, production_status: st, ...extra }) as Order;
 
-test('wewenang status produksi: antri/dirangkai oleh perangkai, "Sudah diambil" oleh kasir setelah lunas', () => {
+test('wewenang status produksi: antri/dirangkai oleh perangkai yang ditunjuk, "Sudah diambil" oleh kasir setelah lunas', () => {
+  const kasir = { id: 'u-k', role: 'kasir' as const }, sari = { id: 'u-s', role: 'perangkai' as const }, owner = { id: 'u-o', role: 'owner' as const };
+  const as = (st: Order['production_status']) => o(st, { fulfillment: 'ambil' } as Partial<Order>);
   // kasir (Admin): tombol Mulai rangkai & Selesai dirangkai abu-abu
-  assert.equal(canSetStatus('kasir', o('antri'), 'dirangkai', 0), false);
-  assert.equal(canSetStatus('kasir', o('dirangkai'), 'siap', 0), false);
-  assert.equal(canSetStatus('kasir', o('siap'), 'selesai', 0), true);
-  assert.equal(canSetStatus('kasir', o('siap'), 'selesai', 210_000), false, 'masih DP: bayar pelunasan dulu');
-  assert.equal(canSetStatus('kasir', o('dirangkai'), 'selesai', 0), false, 'belum siap tidak bisa langsung diambil');
-  // perangkai: Sudah diambil abu-abu
-  assert.equal(canSetStatus('perangkai', o('antri'), 'dirangkai', 210_000), true);
-  assert.equal(canSetStatus('perangkai', o('dirangkai'), 'siap', 210_000), true);
-  assert.equal(canSetStatus('perangkai', o('siap'), 'selesai', 0), false);
-  // owner: semua, kecuali diambil saat masih ada sisa tagihan
-  assert.equal(canSetStatus('owner', o('antri'), 'dirangkai', 0), true);
-  assert.equal(canSetStatus('owner', o('siap'), 'selesai', 1), false);
-  assert.equal(canSetStatus('owner', o('siap'), 'selesai', 0), true);
+  assert.equal(canSetStatus(kasir, as('antri'), 'dirangkai', 0, 'u-s'), false);
+  assert.equal(canSetStatus(kasir, as('dirangkai'), 'siap', 0, 'u-s'), false);
+  assert.equal(canSetStatus(kasir, as('siap'), 'selesai', 0), true);
+  assert.equal(canSetStatus(kasir, as('siap'), 'selesai', 210_000), false, 'masih DP: bayar pelunasan dulu');
+  assert.equal(canSetStatus(kasir, as('dirangkai'), 'selesai', 0), false, 'belum siap tidak bisa langsung diambil');
+  // perangkai yang ditunjuk: boleh; Sudah diambil abu-abu
+  assert.equal(canSetStatus(sari, as('antri'), 'dirangkai', 210_000, 'u-s'), true);
+  assert.equal(canSetStatus(sari, as('dirangkai'), 'siap', 210_000, 'u-s'), true);
+  assert.equal(canSetStatus(sari, as('siap'), 'selesai', 0, 'u-s'), false);
+  // owner: diambil boleh bila lunas; tidak boleh menggantikan perangkai yang ditunjuk
+  assert.equal(canSetStatus(owner, as('antri'), 'dirangkai', 0, 'u-s'), false);
+  assert.equal(canSetStatus(owner, as('siap'), 'selesai', 1), false);
+  assert.equal(canSetStatus(owner, as('siap'), 'selesai', 0), true);
+  assert.equal(canSetStatus(owner, as('selesai'), 'siap', 0, 'u-s'), true, 'owner mengoreksi salah tekan Sudah diambil');
   // pesanan batal: tidak ada yang bisa mengubah
-  assert.equal(canSetStatus('owner', o('antri', { void: true }), 'dirangkai', 0), false);
+  assert.equal(canSetStatus(sari, o('antri', { void: true, fulfillment: 'ambil' } as Partial<Order>), 'dirangkai', 0, 'u-s'), false);
 });
 
 test('galat perantara: halaman ngrok/cloudflare non-JSON diterjemahkan, bukan "Galat 404"', () => {

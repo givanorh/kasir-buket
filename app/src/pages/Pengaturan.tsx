@@ -11,6 +11,8 @@ import { planImport, runImport, type ImportPlan } from '../lib/kasirpintar';
 import { Badge, Empty, Field, Modal, MoneyInput, Seg, TabPanel, toast } from '../components/ui';
 import { Icon } from '../components/icons';
 import { DEFAULT_DRAWER_FLOAT, DEFAULT_PETTY_TARGET, DEFAULT_SURVEY, answerOf, storeCfg } from '../lib/settings';
+import { floristList } from '../lib/rules';
+import { DEFAULT_COSTS } from '../lib/costs';
 import { REVIEW_ACCEPT_RATE, budgetLeft, budgetSuggestion, monthKey, monthStartIso, reviewTiers, reviewUsage, tierAmount } from '../lib/review';
 import { parseLocalInput } from '../lib/geo';
 import { num, rp } from '../lib/format';
@@ -30,7 +32,7 @@ export default function Pengaturan() {
     ...(!owner ? [{ value: 'reset', label: 'Reset Password' }] as { value: Tab; label: string }[] : []),
     ...(owner ? [
       { value: 'toko', label: 'Toko & cabang' }, { value: 'promo', label: 'Promo, poin & ongkir' }, { value: 'perangkai', label: 'Perangkai' },
-      { value: 'survei', label: 'Survei' }, { value: 'pengguna', label: 'Pengguna' }, { value: 'email', label: 'Reset Password' }, { value: 'impor', label: 'Impor Kasir Pintar' },
+      { value: 'survei', label: 'Survei' }, { value: 'pengguna', label: 'Staff' }, { value: 'email', label: 'Reset Password' }, { value: 'impor', label: 'Impor Kasir Pintar' },
     ] as { value: Tab; label: string }[] : []),
   ];
   return (
@@ -519,10 +521,19 @@ function SelfResetTab() {
   );
 }
 
-interface UserRow { id: string; username: string; name: string; email?: string | null; phone?: string | null; birth_date?: string | null; role: Role; active: number; outlet_id?: string | null; can_view?: boolean }
+interface UserRow { id: string; username: string; name: string; email?: string | null; phone?: string | null; birth_date?: string | null; role: Role; roles?: Role[]; active: number; outlet_id?: string | null; can_view?: boolean }
+type StaffRoles = { kasir: boolean; perangkai: boolean; owner: boolean };
+const rolesFromFlags = (r: StaffRoles): Role[] => (r.owner ? ['owner'] : (['kasir', 'perangkai'] as Role[]).filter((k) => r[k as 'kasir' | 'perangkai']));
+const firstName = (n: string) => n.trim().toLowerCase().split(/\s+/)[0] || '';
 function UsersTab() {
   const [users, setUsers] = useState<UserRow[]>([]);
-  const [f, setF] = useState({ name: '', username: '', password: '', email: '', phone: '', birth_date: '', role: 'kasir' as Role, outlet_id: 'outlet-utama' });
+  const [f, setF] = useState({ name: '', username: '', password: '', email: '', phone: '', birth_date: '', roles: { kasir: true, perangkai: false, owner: false } as StaffRoles, outlet_id: 'outlet-utama' });
+  // pegawai dari Laporan › Perhitungan HPP › Gaji & biaya yang belum punya akun (dicocokkan dengan nama depan)
+  const costsQ = useLiveQuery(() => db.costs.toArray(), []);
+  // daftar gaji belum pernah dibuka (koleksi kosong): pakai 7 pegawai bawaan
+  const costs = costsQ && !costsQ.some((c) => c.kind === 'pegawai') ? DEFAULT_COSTS : costsQ || [];
+  const [pend, setPend] = useState<Record<string, StaffRoles>>({});
+  const [creating, setCreating] = useState(false);
   const [personal, setPersonal] = useState<UserRow | null>(null);
   const outlets = useLiveQuery(() => db.outlets.toArray(), []) || [];
   const [shown, setShown] = useState<Record<string, string>>({});
@@ -534,7 +545,33 @@ function UsersTab() {
   }
   useEffect(() => { load(); }, []);
   async function add() {
-    try { await api('/api/users', { body: f }); toast('Pengguna dibuat'); setF({ name: '', username: '', password: '', email: '', phone: '', birth_date: '', role: 'kasir', outlet_id: f.outlet_id }); load(); } catch (e) { toast((e as Error).message, 'err'); }
+    const roles = rolesFromFlags(f.roles);
+    if (!roles.length) { toast('Pilih minimal satu peran: Admin atau Perangkai', 'err'); return; }
+    try { await api('/api/users', { body: { ...f, roles } }); toast('Akun dibuat'); setF({ name: '', username: '', password: '', email: '', phone: '', birth_date: '', roles: { kasir: true, perangkai: false, owner: false }, outlet_id: f.outlet_id }); load(); } catch (e) { toast((e as Error).message, 'err'); }
+  }
+  const uRoles = (u: UserRow): Role[] => (u.role === 'owner' ? ['owner'] : u.roles?.length ? u.roles : [u.role]);
+  async function toggleRole(u: UserRow, r: 'kasir' | 'perangkai') {
+    const cur = uRoles(u);
+    const next = cur.includes(r) ? cur.filter((x) => x !== r) : [...cur, r];
+    if (!next.length) { toast('Pegawai minimal punya satu peran', 'err'); return; }
+    await patch(u.id, { roles: next });
+  }
+  const taken = new Set(users.map((u) => firstName(u.name)));
+  const noAccount = costs.filter((c) => c.kind === 'pegawai' && c.active !== false && !c.deleted && !taken.has(firstName(c.name)))
+    .sort((a, b) => (a.sort || 0) - (b.sort || 0));
+  const pendOf = (id: string, role?: string): StaffRoles => pend[id] || { kasir: role === 'admin', perangkai: role === 'perangkai', owner: false };
+  async function createFor(list: typeof noAccount) {
+    setCreating(true);
+    const made: string[] = [];
+    try {
+      for (const c of list) {
+        const roles = rolesFromFlags(pendOf(c.id, c.role));
+        if (!roles.length) { toast(`Pilih peran untuk ${c.name}`, 'err'); continue; }
+        const r = await api<{ username: string }>('/api/users', { body: { name: c.name, roles, generate: true, outlet_id: f.outlet_id } });
+        made.push(`${c.name} (@${r.username})`);
+      }
+      if (made.length) toast(`Akun dibuat: ${made.join(', ')}. Sandi awal dibuat acak; buka lewat tombol Lihat.`);
+    } catch (e) { toast((e as Error).message, 'err'); } finally { setCreating(false); load(); }
   }
   async function patch(id: string, body: object) {
     try { await api(`/api/users/${id}`, { method: 'PATCH', body }); load(); toast('Disimpan'); return true; } catch (e) { toast((e as Error).message, 'err'); return false; }
@@ -542,7 +579,7 @@ function UsersTab() {
   return (
     <div className="stack">
       <section className="card">
-        <h3>Pengguna</h3>
+        <h3>Staff · {users.filter((u) => u.active).length} akun aktif</h3>
         <div className="ulist">
           <div className="uhead"><span>Nama</span><span>Peran</span><span>Cabang</span><span /></div>
           {users.map((u) => (
@@ -555,7 +592,11 @@ function UsersTab() {
                       <button className="linkish small" onClick={() => { navigator.clipboard?.writeText(shown[u.id]).then(() => toast('Sandi disalin')).catch(() => toast('Salin manual dari layar', 'err')); }}>Salin</button></div>
                   )}</div>
               </div>
-              <select value={u.role} onChange={(e) => patch(u.id, { role: e.target.value })} aria-label={`Peran ${u.name}`}><option value="owner">Owner</option><option value="kasir">Admin</option><option value="perangkai">Perangkai</option></select>
+              {u.role === 'owner'
+                ? <span className="rolechips"><Badge tone="rose">Owner</Badge></span>
+                : <span className="rolechips chips small" role="group" aria-label={`Peran ${u.name}`} data-testid="role-chips">
+                    {(['kasir', 'perangkai'] as const).map((r) => <button key={r} className={uRoles(u).includes(r) ? 'on' : ''} aria-pressed={uRoles(u).includes(r)} onClick={() => toggleRole(u, r)}>{ROLE_LABEL[r]}</button>)}
+                  </span>}
               <select value={u.outlet_id || 'outlet-utama'} onChange={(e) => patch(u.id, { outlet_id: e.target.value })} aria-label={`Cabang ${u.name}`}>{outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select>
               <div className="uact">
                 <button className="btn small ghost" onClick={() => setPersonal(u)} aria-label={`Data pribadi ${u.name}`} data-testid="data-pribadi">Data</button>
@@ -568,10 +609,31 @@ function UsersTab() {
           ))}
         </div>
         <p className="muted small"><b>Lihat</b> menampilkan sandi yang diatur owner (saat membuat pengguna atau lewat tombol Sandi). Sandi yang diganti pengguna sendiri lewat “Lupa kata sandi?” tidak disimpan, jadi tidak bisa dilihat; atur ulang lewat Sandi bila perlu.</p>
-        <p className="muted small">Peran: <b>Owner</b> semua menu termasuk laporan dan pengaturan promo; <b>Admin</b> kasir, pesanan, pelanggan, shift; <b>Perangkai</b> papan produksi. Cabang menentukan stok dan laporan saat pengguna masuk.</p>
+        <p className="muted small">Peran: <b>Owner</b> semua menu (tidak bisa digabung); <b>Admin</b> kasir, riwayat, pelanggan, shift; <b>Perangkai</b> papan produksi, dan hanya perangkai yang ditunjuk yang bisa mengonfirmasi Antri → Dirangkai → Siap. Pegawai boleh punya dua peran (Admin + Perangkai). Satu pegawai = satu akun. Cabang menentukan stok dan laporan saat pengguna masuk.</p>
       </section>
+      {noAccount.length > 0 && (
+        <section className="card" data-testid="pegawai-tanpa-akun">
+          <h3>Pegawai belum punya akun · {noAccount.length}</h3>
+          <p className="muted small">Dari daftar gaji (Laporan › Perhitungan HPP › Gaji & biaya). Pilih peran, lalu buat akun. Username = nama depan; sandi awal dibuat acak oleh server dan bisa dibuka lewat tombol <b>Lihat</b> untuk diberikan ke pegawai.</p>
+          {noAccount.map((c) => {
+            const r = pendOf(c.id, c.role);
+            return (
+              <div key={c.id} className="row" data-testid="calon-akun">
+                <span><b>{c.name}</b> <span className="muted small">· @{firstName(c.name).replace(/[^a-z0-9]/g, '') || 'staf'}</span></span>
+                <span className="uact">
+                  <span className="chips small" role="group" aria-label={`Peran ${c.name}`}>
+                    {(['kasir', 'perangkai'] as const).map((k) => <button key={k} className={r[k] ? 'on' : ''} aria-pressed={r[k]} onClick={() => setPend({ ...pend, [c.id]: { ...r, [k]: !r[k] } })}>{ROLE_LABEL[k]}</button>)}
+                  </span>
+                  <button className="btn small" disabled={creating} onClick={() => createFor([c])}>Buat akun</button>
+                </span>
+              </div>
+            );
+          })}
+          <button className="btn primary" style={{ alignSelf: 'flex-start' }} disabled={creating} onClick={() => createFor(noAccount)} data-testid="buat-semua-akun">{creating ? 'Membuat…' : `Buat akun untuk ${noAccount.length} pegawai`}</button>
+        </section>
+      )}
       <section className="card">
-        <h3>Tambah pengguna</h3>
+        <h3>Tambah staff</h3>
         <div className="formgrid">
           <Field label="Nama"><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
           <Field label="Username"><input value={f.username} onChange={(e) => setF({ ...f, username: e.target.value.toLowerCase() })} autoCapitalize="none" autoComplete="off" name="kb-new-username" data-lpignore="true" /></Field>
@@ -579,10 +641,15 @@ function UsersTab() {
           <Field label="No HP"><input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} inputMode="tel" autoComplete="off" placeholder="08…" /></Field>
           <Field label="Tanggal lahir"><input type="date" value={f.birth_date} onChange={(e) => setF({ ...f, birth_date: e.target.value })} /></Field>
           <Field label="Kata sandi (min. 6)"><input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} autoComplete="new-password" name="kb-new-password" /></Field>
-          <Field group label="Peran"><Seg value={f.role} onChange={(role) => setF({ ...f, role })} options={[{ value: 'kasir', label: 'Admin' }, { value: 'perangkai', label: 'Perangkai' }, { value: 'owner', label: 'Owner' }]} /></Field>
+          <Field group label="Peran">
+            <div className="chips" data-testid="peran-baru">
+              {(['kasir', 'perangkai'] as const).map((k) => <button key={k} className={f.roles[k] && !f.roles.owner ? 'on' : ''} aria-pressed={f.roles[k] && !f.roles.owner} onClick={() => setF({ ...f, roles: { ...f.roles, owner: false, [k]: !f.roles[k] } })}>{ROLE_LABEL[k]}</button>)}
+              <button className={f.roles.owner ? 'on' : ''} aria-pressed={f.roles.owner} onClick={() => setF({ ...f, roles: { kasir: false, perangkai: false, owner: !f.roles.owner } })}>Owner</button>
+            </div>
+          </Field>
           <Field label="Cabang"><select value={f.outlet_id} onChange={(e) => setF({ ...f, outlet_id: e.target.value })}>{outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></Field>
         </div>
-        <button className="btn primary" style={{ alignSelf: 'flex-start' }} disabled={!f.name || !f.username || f.password.length < 6} onClick={add}>Tambah pengguna</button>
+        <button className="btn primary" style={{ alignSelf: 'flex-start' }} disabled={!f.name || !f.username || f.password.length < 6} onClick={add}>Tambah staff</button>
       </section>
       {personal && <PersonalModal u={personal} onClose={() => setPersonal(null)} onSave={async (body) => { if (await patch(personal.id, body)) setPersonal(null); }} />}
     </div>
@@ -745,6 +812,9 @@ const JOB_STATUS: Record<NotifyJob['status'], [string, 'green' | 'amber' | 'red'
 /** Daftar perangkai + email Google mereka untuk notifikasi Tugas di Google Calendar. */
 function FloristTab() {
   const st = useLiveQuery(() => db.settings.get('toko'));
+  const staff = useLiveQuery(() => db.staff.toArray(), []);
+  // v1.10: perangkai = akun berperan Perangkai (tab Staff); nama lama dipakai bila belum ada akun perangkai
+  const fromStaff = !!staff && floristList(staff, []).length > 0;
   const [nv, setNv] = useState<NotifyView | null>(null);
   const [rows, setRows] = useState<{ name: string; email: string }[] | null>(null);
   const [opt, setOpt] = useState({ enabled: true, leadMinutes: 60 });
@@ -752,11 +822,12 @@ function FloristTab() {
   const load = () => api<NotifyView>('/api/notify').then(setNv).catch((e) => toast(e.message, 'err'));
   useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, []);
   useEffect(() => {
-    if (!st || !nv || rows) return;
-    const email = (n: string) => nv.contacts.find((c) => c.name.trim().toLowerCase() === n.trim().toLowerCase())?.email || '';
-    setRows(storeCfg(st).florists.map((name) => ({ name, email: email(name) })));
+    if (!st || !nv || !staff || rows) return;
+    const n0 = (n: string) => n.trim().toLowerCase();
+    const email = (n: string) => (nv.contacts.find((c) => n0(c.name) === n0(n)) || nv.contacts.find((c) => n0(c.name).split(/\s+/)[0] === n0(n).split(/\s+/)[0]))?.email || '';
+    setRows(floristList(staff, storeCfg(st).florists).map((f) => ({ name: f.name, email: email(f.name) })));
     setOpt({ enabled: nv.enabled, leadMinutes: nv.leadMinutes });
-  }, [st, nv]); // eslint-disable-line
+  }, [st, nv, staff]); // eslint-disable-line
   if (!rows || !nv) return null;
   const setRow = (i: number, p: Partial<{ name: string; email: string }>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...p } : r)));
   async function saveAll() {
@@ -764,7 +835,7 @@ function FloristTab() {
     try {
       const clean = rows!.map((r) => ({ name: r.name.trim(), email: r.email.trim() })).filter((r) => r.name);
       setNv(await api<NotifyView>('/api/notify', { body: { ...opt, contacts: clean } }));
-      await save<Settings>('settings', 'toko', { florists: clean.map((r) => r.name) });
+      if (!fromStaff) await save<Settings>('settings', 'toko', { florists: clean.map((r) => r.name) });
       setRows(clean);
       toast('Perangkai & notifikasi disimpan');
     } catch (e) { toast((e as Error).message, 'err'); } finally { setBusy(''); }
@@ -784,18 +855,20 @@ function FloristTab() {
             <div className="fhead"><span>Nama</span><span>Gmail perangkai</span><span /></div>
             {rows.map((r, i) => (
               <div key={i} className="frow" data-testid="florist-row">
-                <input value={r.name} onChange={(e) => setRow(i, { name: e.target.value })} aria-label={`Nama perangkai ${i + 1}`} />
+                <input value={r.name} readOnly={fromStaff} onChange={(e) => setRow(i, { name: e.target.value })} aria-label={`Nama perangkai ${i + 1}`} />
                 <input type="email" value={r.email} onChange={(e) => setRow(i, { email: e.target.value.trim() })} placeholder="nama@gmail.com" autoCapitalize="none" aria-label={`Email ${r.name || 'perangkai'}`} />
                 <div className="uact">
                   <button className="btn small ghost" disabled={!!busy || !saved(r.name) || !nv.smtp.configured} onClick={() => test(r.name, false)} title="Kirim Tugas uji">Uji</button>
                   <button className="btn small ghost" disabled={!!busy || !saved(r.name) || !nv.smtp.configured} onClick={() => test(r.name, true)} title="Batalkan Tugas uji">Batalkan uji</button>
-                  <button className="icon-btn" onClick={() => setRows(rows.filter((_, j) => j !== i))} aria-label={`Hapus ${r.name}`}><Icon name="close" size={18} /></button>
+                  {!fromStaff && <button className="icon-btn" onClick={() => setRows(rows.filter((_, j) => j !== i))} aria-label={`Hapus ${r.name}`}><Icon name="close" size={18} /></button>}
                 </div>
               </div>
             ))}
           </div>
-          <button className="btn small" onClick={() => setRows([...rows, { name: '', email: '' }])}><Icon name="plus" size={16} />Perangkai</button>
-          <p className="muted small">Nama tampil di pilihan perangkai saat checkout dan di tiket produksi. Email hanya tersimpan di server, tidak ikut ke HP kasir.</p>
+          {fromStaff
+            ? <p className="muted small">Daftar diambil dari akun berperan Perangkai di tab <b>Staff</b> (tambah/ubah peran di sana). Email di sini hanya untuk notifikasi Tugas & Google Calendar, tersimpan di server.</p>
+            : <><button className="btn small" onClick={() => setRows([...rows, { name: '', email: '' }])}><Icon name="plus" size={16} />Perangkai</button>
+              <p className="muted small">Belum ada akun berperan Perangkai. Buat akun di tab <b>Staff</b> agar penunjukan terkunci ke akun perangkai. Email hanya tersimpan di server, tidak ikut ke HP kasir.</p></>}
         </section>
         <section className="card">
           <h3>Notifikasi tugas & Google Calendar</h3>

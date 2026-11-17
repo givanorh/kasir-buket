@@ -8,7 +8,7 @@
 // sehingga edit offline tidak tertimpa. Penggabungan per kolom (patch), bukan per rekaman.
 import { useSyncExternalStore } from 'react';
 import { db, getMeta, setMeta } from './db';
-import { api, ApiError, applyDeviceRecord, getSession, logout, updateSession } from './session';
+import { api, ApiError, applyDeviceRecord, applyStaffRecord, getSession, logout, updateSession } from './session';
 import { COLLECTIONS } from './types';
 
 export interface SyncStatus {
@@ -194,6 +194,9 @@ class SyncEngine {
         // owner mengganti nama/kategori perangkat ini: kode nomor struk langsung ikut berubah
         const mine = res.changes.filter((ch) => ch.c === 'devices' && !ch.del && ch.id === getSession().deviceId).pop();
         if (mine) await applyDeviceRecord(mine.data);
+        // owner mengubah peran akun ini (mis. Perangkai → Admin + Perangkai): menu ikut berubah tanpa masuk ulang
+        const meRec = res.changes.filter((ch) => ch.c === 'staff' && !ch.del && ch.id === getSession().user?.id).pop();
+        if (meRec) await applyStaffRecord(meRec.data);
       }
       cursor = res.cursor;
       this.set({ cursor });

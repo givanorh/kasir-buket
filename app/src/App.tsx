@@ -19,7 +19,7 @@ import Laporan from './pages/Laporan';
 import ShiftPage from './pages/Shift';
 import Pengaturan from './pages/Pengaturan';
 import type { Role } from './lib/types';
-import { ROLE_LABEL } from './lib/labels';
+import { ROLE_LABEL, rolesLabel } from './lib/labels';
 
 export { ROLE_LABEL };
 
@@ -104,11 +104,11 @@ function UserMenu() {
     <div style={{ position: 'relative' }} ref={ref}>
       <button className="user-btn" onClick={() => setOpen(!open)} aria-expanded={open} data-testid="user-menu">
         <span className="avatar">{initials(u.name)}</span>
-        <span className="who-text"><span className="who-name">{u.name}</span><span className="who-sub">{ROLE_LABEL[u.role]} · {outlet?.name || 'Toko'}</span></span>
+        <span className="who-text"><span className="who-name">{u.name}</span><span className="who-sub">{rolesLabel(u)} · {outlet?.name || 'Toko'}</span></span>
       </button>
       {open && (
         <div className="menu" role="menu">
-          <div className="menu-head"><b>{u.name}</b><div className="muted">@{u.username} · {ROLE_LABEL[u.role]} · perangkat {s.device?.code}</div></div>
+          <div className="menu-head"><b>{u.name}</b><div className="muted">@{u.username} · {rolesLabel(u)} · perangkat {s.device?.code}</div></div>
           <button role="menuitem" onClick={() => { setOpen(false); location.hash = '#/pengaturan'; }}><Icon name="pengaturan" />Pengaturan</button>
           <button role="menuitem" onClick={out}><Icon name="swap" />Ganti akun</button>
           <button role="menuitem" className="danger" onClick={out}><Icon name="logout" />Keluar</button>

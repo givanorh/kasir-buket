@@ -127,8 +127,8 @@ Catatan: Chrome mungkin meminta Anda mengetik “allow pasting” sebelum bisa m
 
 ## 7. Pemakaian Harian
 1. **Buka shift** (menu Shift, atau langsung di halaman Kasir): kas awal laci kasir terisi otomatis Rp 1.000.000 (modal kembalian, bisa diubah). Akun Admin dan Perangkai tidak bisa memakai Kasir sebelum shift dibuka; owner tetap bisa.
-2. **Transaksi**: pilih produk › Bayar › isi pelanggan, pengambilan, kartu ucapan, catatan › pilih Lunas/DP › Simpan. Dua cetakan keluar otomatis.
-3. **Ruang perangkai** (akun perangkai): menu Produksi, ketuk “Mulai rangkai” › “Selesai dirangkai”. Status langsung terlihat di kasir.
+2. **Transaksi**: pilih produk › Bayar › isi pelanggan, pengambilan, perangkai, kartu ucapan, catatan › pilih Lunas/DP › Simpan. Pesanan ambil nanti/diantar mencetak struk + tiket produksi; pengambilan **Ready** (buket jadi, langsung dibawa) hanya mencetak struk.
+3. **Ruang perangkai** (akun perangkai): menu Produksi, ketuk “Mulai rangkai” › “Selesai dirangkai” pada pesanan yang ditunjuk ke Anda. Pesanan perangkai lain tampil dengan tombol abu-abu. Status langsung terlihat di kasir.
 4. **Pengambilan & pelunasan DP** (akun kasir/Admin): Produksi › kolom Siap diambil/antar. Pesanan yang masih DP menampilkan **Bayar pelunasan** › pilih metode › Bayar; struk pelunasan tercetak otomatis. Setelah lunas, tombol berganti **Sudah diambil**.
 5. **Kas keluar** (uang sampah, sumbangan, pembelian darurat): menu Shift › Laci meja kamar (kas kecil). Uang di laci kasir tidak dipakai untuk biaya, hanya untuk kembalian pelanggan.
 6. **Tutup shift**: hitung uang di laci kasir, isi kas aktual, tekan Tutup shift, periksa ringkasan selisih, lalu **Ya, tutup shift**.
@@ -264,6 +264,18 @@ Sinkron berjalan sendiri. Lencana di kanan atas: hijau “Tersinkron”, kuning 
    - Jumlah tetap kedua laci diatur di Pengaturan › Toko & cabang › Laci kas.
    - Kas keluar berkategori beban tetap masuk laporan laba rugi seperti sebelumnya. Catatan kas keluar/masuk lama (sebelum v1.9) tetap dihitung di rekap shift tempat catatan itu dibuat, jadi riwayat shift lama tidak berubah.
 
+## 8g. Fitur Versi 1.10
+1. **Ready tanpa perangkai**: pengambilan Ready (buket jadi, langsung dibawa) tidak menampilkan pilihan perangkai dan catatan perangkai, tidak masuk antrean produksi, dan hanya mencetak struk. Ready lunas langsung berstatus Selesai; Ready yang masih DP/bayar nanti masuk kolom Siap dengan tombol Bayar pelunasan.
+2. **Tab Staff** (dulu Pengguna) di Pengaturan:
+   - Satu pegawai = satu akun. Peran: **Admin** (kasir) dan/atau **Perangkai**; boleh keduanya. **Owner** tidak bisa digabung.
+   - Kartu **Pegawai belum punya akun** mengambil nama dari daftar gaji (Laporan › Perhitungan HPP › Gaji & biaya), dicocokkan dengan nama depan akun yang sudah ada. Peran awal mengikuti daftar gaji (perangkai → Perangkai, admin → Admin) dan bisa diubah sebelum dibuat.
+   - **Buat akun untuk N pegawai**: username = nama depan (huruf kecil; kembar diberi angka, mis. iin2), sandi awal 10 karakter dibuat acak oleh server. Buka lewat tombol **Lihat** untuk diberikan ke pegawai; pegawai bisa menggantinya lewat Reset Password atau owner lewat tombol Sandi.
+   - Peran tiap akun diubah dengan tombol Admin/Perangkai di barisnya; akun yang sedang masuk ikut berubah saat sinkron, tanpa masuk ulang.
+3. **Daftar perangkai** di checkout, detail pesanan, filter Produksi, dan tab Perangkai = akun aktif berperan Perangkai. Daftar nama lama di tab Perangkai hanya dipakai bila belum ada satu pun akun perangkai. Email notifikasi Tugas tetap diatur di tab Perangkai; nama akun ("Iin") dan nama lama ("Iin Ruslinda") dicocokkan lewat nama depan.
+4. **Hanya perangkai yang ditunjuk** yang bisa menekan **Mulai rangkai** dan **Selesai dirangkai** (juga status Antri/Dirangkai/Siap di detail). Admin, owner, dan perangkai lain melihat tombol abu-abu. Aturan ini juga diperiksa server, jadi tidak bisa dilewati dari perangkat lain. Siap → Sudah diambil tetap dikonfirmasi Admin/owner setelah lunas.
+5. **Belum ditunjuk**: bila kasir/owner memilih "Belum ditunjuk" saat checkout, muncul peringatan di formulir, dan kartu pesanan di kolom Antri diberi label merah **Perangkai belum ditunjuk** dengan tombol **Tunjuk perangkai** (hanya Admin/owner). Perangkai tidak bisa menunjuk dirinya sendiri.
+6. Pesanan lama yang perangkainya tercatat sebagai nama (tanpa akun) dicocokkan ke akun lewat nama depan; bila tidak ada akun yang cocok, akun berperan Perangkai mana pun bisa memprosesnya.
+
 ## 9. Lupa Kata Sandi
 1. **Lewat email (disarankan).** Owner mengatur sekali: Pengaturan › Reset Password › Email Reset › isi **Akun GMAIL Toko** dan **Pass Email Toko** (*app password*: Akun Google › Keamanan › Verifikasi 2 Langkah aktif › myaccount.google.com/apppasswords) › Simpan › **Tes Email**. Lalu isi email tiap pengguna di Pengaturan › Pengguna. Di halaman masuk, ketuk **Lupa kata sandi?**, masukkan username atau email, masukkan kode 6 digit dari email (berlaku 15 menit), lalu buat sandi baru.
 2. **Staf lupa sandi**: owner cukup menekan tombol **Sandi** di Pengaturan › Pengguna.
@@ -319,6 +331,7 @@ Setiap basis data punya ID unik. Bila perangkat masuk ke server dengan ID berbed
 - **Denyut (heartbeat)**: pesan kecil berkala lewat SSE sebagai tanda saluran masih hidup.
 - **Hari-perangkat**: satuan pemakaian = 1 perangkat aktif selama 1 hari; 3 perangkat selama 30 hari = 90 hari-perangkat.
 - **User-Agent**: keterangan browser dan sistem yang dikirim perangkat pada setiap permintaan; dipakai untuk mengisi kolom info di daftar perangkat.
+- **Peran utama**: peran yang dipakai server untuk izin data. Akun Admin + Perangkai memakai izin Admin (yang sudah mencakup izin perangkai).
 - **Kas kecil (sistem imprest)**: dana tunai dengan jumlah tetap untuk pengeluaran kecil; setelah dipakai, diisi ulang sebesar yang terpakai sehingga kembali ke jumlah tetap.
 - **Modal kembalian (float)**: uang tunai awal di laci kasir untuk memberi kembalian; bukan untuk biaya.
 - **Selisih kas**: kas aktual − kas seharusnya; positif = lebih, negatif = kurang.

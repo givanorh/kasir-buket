@@ -10,7 +10,8 @@ export interface Base {
 }
 
 export interface Outlet extends Base { name: string; address?: string; phone?: string; code?: string; active?: boolean; location?: { lat: number; lng: number } | null; maps_input?: string }
-export interface Staff extends Base { name: string; username: string; role: Role; active: boolean; outlet_id?: string | null }
+/** Cermin akun dari server. `role` = peran utama; `roles` (v1.10) = semua peran (pegawai boleh Admin + Perangkai). */
+export interface Staff extends Base { name: string; username: string; role: Role; roles?: Role[]; active: boolean; outlet_id?: string | null }
 export interface Device extends Base { code: string; name?: string; user_id?: string; outlet_id?: string; last_seen?: string; /** ringkasan browser + sistem, diisi server saat login */ ua?: string }
 
 export interface ExpenseCategory { name: string; biaya: boolean }
@@ -140,7 +141,8 @@ export interface Order extends Base {
   void_reason?: string;
   void_at?: string;
   source?: 'app' | 'kasirpintar';
-  florist?: string; // perangkai yang ditunjuk
+  florist?: string; // nama perangkai yang ditunjuk (tampil di tiket & notifikasi)
+  florist_id?: string | null; // v1.10: akun perangkai yang ditunjuk; hanya akun ini yang boleh mengubah antri/dirangkai
   delivery?: { input: string; lat: number; lng: number; km: number; km_source: 'ors' | 'osrm' | 'estimasi' | 'manual'; rate: number; min: number } | null;
   manual_discount?: number;
   points_earned?: number;

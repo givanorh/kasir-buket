@@ -6,7 +6,7 @@ import type { Role } from './types';
 import { proxyMessage } from './rules';
 import { guessKind } from './device';
 
-export interface SessionUser { id: string; name: string; username: string; role: Role; outlet_id?: string }
+export interface SessionUser { id: string; name: string; username: string; role: Role; roles?: Role[]; outlet_id?: string }
 export interface SessionDevice { id: string; code: string; name?: string; outlet_id?: string }
 export interface Session { serverUrl: string; token: string | null; user: SessionUser | null; device: SessionDevice | null; deviceId: string; serverInstance: string | null }
 
@@ -111,6 +111,16 @@ export async function login(username: string, password: string, confirmDiscard?:
   }
   await updateSession({ token: r.token, user: r.user, device: r.device, serverInstance: r.instanceId || session.serverInstance });
   return r;
+}
+
+/** Owner mengubah peran/nama akun ini (tab Staff): sesi ikut diperbarui saat sinkron, tanpa masuk ulang. */
+export async function applyStaffRecord(rec: { id: string; name?: string; role?: Role; roles?: Role[] } | undefined) {
+  const u = session.user;
+  if (!rec || !u || rec.id !== u.id || !rec.role) return false;
+  const roles = rec.roles?.length ? rec.roles : [rec.role];
+  if (rec.role === u.role && (rec.name || u.name) === u.name && roles.join() === (u.roles || [u.role]).join()) return false;
+  await updateSession({ user: { ...u, name: rec.name || u.name, role: rec.role, roles } });
+  return true;
 }
 
 /**

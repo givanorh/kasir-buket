@@ -105,18 +105,18 @@ try {
 
   // pengguna perangkai
   await A.goto(BASE + '/#/pengaturan');
-  await A.getByRole('radio', { name: 'Pengguna' }).click();
-  await A.getByLabel('Nama', { exact: true }).fill('Sari (perangkai)');
+  await A.getByRole('radio', { name: 'Staff' }).click();
+  await A.getByLabel('Nama', { exact: true }).fill('Nazra');
   await A.getByLabel('Username').fill('rangkai1');
   await A.getByLabel('Kata sandi (min. 6)').fill('rangkai1');
-  await A.getByRole('group', { name: 'Peran' }).getByRole('radio', { name: 'Perangkai' }).click();
-  await A.getByRole('button', { name: 'Tambah pengguna', exact: true }).click();
+  await A.getByRole('group', { name: 'Peran', exact: true }).getByRole('button', { name: 'Admin' }).click();
+  await A.getByRole('group', { name: 'Peran', exact: true }).getByRole('button', { name: 'Perangkai' }).click();
+  await A.getByRole('button', { name: 'Tambah staff', exact: true }).click();
   await A.getByText('@rangkai1').waitFor();
   await A.getByLabel('Nama', { exact: true }).fill('Tiara');
   await A.getByLabel('Username').fill('tiara');
   await A.getByLabel('Kata sandi (min. 6)').fill('tiara123');
-  await A.getByRole('group', { name: 'Peran' }).getByRole('radio', { name: 'Admin' }).click();
-  await A.getByRole('button', { name: 'Tambah pengguna', exact: true }).click();
+  await A.getByRole('button', { name: 'Tambah staff', exact: true }).click();
   await A.getByText('@tiara').waitFor();
   assert(true, 'akun perangkai & Admin dibuat');
   await A.getByRole('button', { name: 'Lihat sandi Tiara' }).click();
@@ -124,6 +124,23 @@ try {
   assert(true, 'owner melihat sandi Tiara (tiara123) lewat tombol Lihat');
   await A.screenshot({ path: path.join(SHOTS, '21-lihat-sandi.png') });
   await A.getByRole('button', { name: 'Sembunyikan sandi Tiara' }).click();
+  // tab Staff: pegawai di daftar gaji yang belum punya akun dibuatkan akun (1 pegawai = 1 akun, sandi acak dari server)
+  assert(await A.getByRole('radio', { name: 'Staff' }).isChecked(), 'tab Pengguna berganti nama menjadi Staff');
+  const calon = await A.getByTestId('calon-akun').allTextContents();
+  assert(calon.length === 5 && ['Iin', 'Fira', 'Mirna', 'Putri', 'Ririn'].every((n) => calon.some((t) => t.includes(n))), `pegawai tanpa akun dari daftar gaji: ${calon.map((t) => t.split('·')[0].trim()).join(', ')} (Nazra & Tiara sudah punya)`);
+  await A.getByTestId('buat-semua-akun').click();
+  await A.getByTestId('pegawai-tanpa-akun').waitFor({ state: 'detached', timeout: 15000 });
+  await A.getByTestId('user-row').filter({ hasText: '@ririn' }).waitFor();
+  assert((await A.getByTestId('user-row').count()) === 8, 'akun dibuat untuk 5 pegawai: owner + 7 pegawai = 8 akun');
+  const iinRow = A.getByTestId('user-row').filter({ hasText: '@iin' });
+  assert(await iinRow.getByRole('button', { name: 'Perangkai', pressed: true }).isVisible() && await A.getByTestId('user-row').filter({ hasText: '@putri' }).getByRole('button', { name: 'Admin', pressed: true }).isVisible(), 'peran awal dari daftar gaji: Iin Perangkai, Putri Admin');
+  await iinRow.getByRole('button', { name: 'Admin' }).click();
+  await iinRow.getByRole('button', { name: 'Admin', pressed: true }).waitFor();
+  assert(await iinRow.getByRole('button', { name: 'Perangkai', pressed: true }).isVisible(), 'peran ganda: Iin menjadi Admin + Perangkai');
+  await A.getByRole('button', { name: 'Lihat sandi Iin' }).click();
+  assert(/^Sandi [A-Za-z0-9]{10}/.test((await A.getByTestId('sandi-terlihat').textContent()).trim()), 'sandi awal acak 10 karakter bisa dibuka owner untuk diberikan ke pegawai');
+  await A.getByRole('button', { name: 'Sembunyikan sandi Iin' }).click();
+  await A.screenshot({ path: path.join(SHOTS, '29-staff.png'), fullPage: true });
 
   // shift
   await A.goto(BASE + '/#/shift');
@@ -166,7 +183,10 @@ try {
   await A.getByTestId('btn-bayar').click();
   await A.getByTestId('cust-name').fill('Rina');
   await A.getByLabel('Nomor HP', { exact: true }).fill('081234567890');
+  assert((await A.getByTestId('florists').count()) === 0 && (await A.getByTestId('notes').count()) === 0 && await A.getByTestId('ready-info').isVisible(), 'pengambilan Ready: tanpa pilihan perangkai dan catatan perangkai');
   await A.getByRole('radio', { name: 'Ambil nanti' }).click();
+  const flBtns = (await A.getByTestId('florists').getByRole('button').allTextContents()).map((t) => t.trim());
+  assert(flBtns.join(',') === 'Belum ditunjuk,Fira,Iin,Mirna,Nazra', `pilihan perangkai = akun berperan Perangkai: ${flBtns.slice(1).join(', ')}`);
   await A.getByTestId('due').fill(dueStr);
   await A.getByTestId('card').fill('Happy Graduation, Rina! Bangga sama kamu.');
   await A.getByTestId('notes').fill('Wrapping pink pastel, pita satin putih');
@@ -208,14 +228,14 @@ try {
   await A.goto(BASE + '/#/pengaturan');
   const rowHR = A.getByTestId('device-row').filter({ has: A.locator('.code', { hasText: /^HR$/ }) });
   await rowHR.waitFor({ timeout: 15000 });
-  assert(/Android/.test(await rowHR.textContent()) && /Sari/.test(await rowHR.textContent()), `owner melihat HP baru: ${(await rowHR.locator('.muted').textContent()).replace(/\s+/g, ' ').trim()}`);
+  assert(/Android/.test(await rowHR.textContent()) && /Nazra/.test(await rowHR.textContent()), `owner melihat HP baru: ${(await rowHR.locator('.muted').textContent()).replace(/\s+/g, ' ').trim()}`);
   await rowHR.getByLabel('Nama perangkat HR').fill('HP ruang rangkai');
   await rowHR.getByTestId('device-save').click();
   await B.getByTestId('device-name').filter({ hasText: 'HP ruang rangkai' }).waitFor({ timeout: 15000 });
   assert((await B.getByTestId('device-code').textContent()) === 'HR', 'nama dari owner sampai ke HP perangkai lewat sinkron; kode tetap HR');
   await A.getByTestId('login-log-toggle').click();
   const logTxt = await A.getByTestId('login-log').textContent();
-  assert(/Sari/.test(logTxt) && /Vano/.test(logTxt), 'riwayat login mencatat siapa masuk dari perangkat mana');
+  assert(/Nazra/.test(logTxt) && /Vano/.test(logTxt), 'riwayat login mencatat siapa masuk dari perangkat mana');
   await A.getByTestId('device-admin').screenshot({ path: path.join(SHOTS, '23-perangkat-terdaftar.png') });
   await B.getByRole('radio', { name: 'Printer' }).click();
   await B.getByTestId('printer-produksi').locator('select').selectOption('system');
@@ -265,6 +285,10 @@ try {
   await A.evaluate(() => { location.hash = '#/kasir'; });
   await card('Buket Snack Wisuda').click();
   await A.getByTestId('btn-bayar').click();
+  await A.getByTestId('cust-name').fill('Budi');
+  await A.getByRole('radio', { name: 'Ambil nanti' }).click();
+  await A.getByTestId('due').fill(dueStr);
+  assert(await A.getByTestId('florist-warn').isVisible(), 'checkout tanpa perangkai: peringatan "Perangkai belum ditunjuk"');
   await A.getByTestId('btn-simpan').click();
   const no2 = await A.getByTestId('order-no').textContent();
   await A.getByTestId('btn-baru').click();
@@ -275,6 +299,19 @@ try {
   await ctxA.setOffline(false);
   await B.locator('[data-testid=prod-card]', { hasText: no2.split('-').pop() }).waitFor({ timeout: 40000 });
   assert(true, `setelah online, transaksi ${no2} sampai di HP perangkai otomatis dalam ${((Date.now() - t0) / 1000).toFixed(1)} dtk`);
+  // pesanan tanpa perangkai: peringatan di kartu Antri + tombol Tunjuk perangkai (Admin/owner)
+  const cardB2 = B.locator('[data-testid=prod-card]', { hasText: no2.split('-').pop() });
+  await cardB2.getByTestId('belum-ditunjuk').waitFor();
+  assert(await cardB2.getByTestId('act-antri').isDisabled() && (await cardB2.getByTestId('btn-tunjuk').count()) === 0, 'kartu Antri tanpa perangkai: peringatan "Perangkai belum ditunjuk"; perangkai tidak bisa memulai atau menunjuk diri sendiri');
+  await A.goto(BASE + '/#/produksi');
+  const cardA2 = A.locator('[data-testid=prod-card]', { hasText: no2.split('-').pop() });
+  await cardA2.getByTestId('btn-tunjuk').click();
+  await A.getByTestId('tunjuk-modal').waitFor();
+  await A.screenshot({ path: path.join(SHOTS, '30-tunjuk-perangkai.png') });
+  await A.getByTestId('tunjuk-pilihan').getByRole('button', { name: 'Iin', exact: true }).click();
+  await cardB2.getByText('Perangkai: Iin').waitFor({ timeout: 15000 });
+  assert((await cardB2.getByTestId('belum-ditunjuk').count()) === 0 && await cardB2.getByTestId('act-antri').isDisabled() && (await cardA2.getByTestId('btn-tunjuk').count()) === 0,
+    'owner menunjuk Iin lewat tombol Tunjuk perangkai; di HP Nazra tombol Mulai rangkai tetap abu-abu (hanya Iin yang bisa)');
 
   // peran di papan Produksi: antri/dirangkai dikonfirmasi perangkai, "Sudah diambil" dikonfirmasi kasir
   const cardA = (no) => A.locator('[data-testid=prod-card]', { hasText: no.split('-').pop() });
@@ -629,15 +666,17 @@ try {
   await D.getByRole('button', { name: 'Uang pas' }).click();
   await D.getByTestId('btn-simpan').click();
   const noNm = await D.getByTestId('order-no').textContent();
+  assert(/tidak dicetak \(Ready/.test(await D.getByTestId('print-produksi').textContent()), 'transaksi Ready: hanya struk pelanggan, tiket produksi tidak dicetak');
   await D.getByTestId('btn-baru').click();
   const nm = await D.evaluate(async (no) => {
     const req = indexedDB.open('kasir-buket');
     const dbx = await new Promise((r) => { req.onsuccess = () => r(req.result); });
     const all = await new Promise((r) => { const q = dbx.transaction('orders').objectStore('orders').getAll(); q.onsuccess = () => r(q.result); });
     const o = all.find((x) => x.no === no);
-    return { earned: o.points_earned, phone: o.customer_phone };
+    return { earned: o.points_earned, phone: o.customer_phone, st: o.production_status, florist: o.florist };
   }, noNm);
   assert(nm.earned === 0 && nm.phone === '081399990000', `pelanggan bukan member bertransaksi (${noNm}): poin 0, HP 081399990000 tercatat`);
+  assert(nm.st === 'selesai' && !nm.florist, `transaksi Ready lunas (${noNm}): langsung Selesai, tanpa perangkai, tidak masuk antrean produksi`);
   await D.goto(BASE + '/#/produksi');
   const cardD = D.locator('[data-testid=prod-card]', { hasText: no2.split('-').pop() });
   await cardD.getByTestId('act-antri').waitFor({ timeout: 15000 });
@@ -662,7 +701,7 @@ try {
 
   // ---------- reset sandi mandiri Admin (email pribadi + No HP + tanggal lahir) ----------
   await A.goto(BASE + '/#/pengaturan');
-  await A.getByRole('radio', { name: 'Pengguna' }).click();
+  await A.getByRole('radio', { name: 'Staff' }).click();
   await A.getByRole('button', { name: 'Data pribadi Tiara' }).click();
   const dlg = A.getByRole('dialog', { name: 'Data pribadi Tiara' });
   await dlg.getByLabel('Email pribadi').fill('tiara@example.com');

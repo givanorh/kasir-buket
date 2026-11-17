@@ -14,6 +14,7 @@ import { deliveryFee, isShortMapsLink, parseLocalInput, type LatLng } from '../l
 import { Badge, Field, Modal, MoneyInput, Seg, toast } from '../components/ui';
 import { Icon } from '../components/icons';
 import { ReceiptPreview } from '../components/ReceiptPreview';
+import { useFlorists } from '../lib/staff';
 import type { Fulfillment, Order, OrderItem, Product } from '../lib/types';
 
 const TINTS = ['#f3dfe6', '#e3ece5', '#efe6dc', '#e2e6f1', '#ece3f0', '#f2ecd8'];
@@ -295,6 +296,7 @@ function EngageModal({ base, onClose }: { base: number; onClose: (r: EngageResul
 function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; engage: EngageResult; onClose: () => void; onDone: (o: Order, r: PrintResult[]) => void }) {
   const settings = useLiveQuery(() => db.settings.get('toko'));
   const cfg = storeCfg(settings);
+  const florists = useFlorists();
   const customers = useLiveQuery(() => db.customers.toArray(), []) || [];
   const orders = useLiveQuery(() => db.orders.where('due_at').above(addDays(new Date(), -1).toISOString()).toArray(), []) || [];
   const [dev, setDev] = useState<DeviceConfig | null>(null);
@@ -302,9 +304,10 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
   const outlet = useLiveQuery(() => (dev ? db.outlets.get(dev.outletId) : undefined), [dev?.outletId]);
   const [f, setF] = useState({
     name: '', phone: '', customerId: '' as string, fulfillment: 'sekarang' as Fulfillment, due: toLocalInput(new Date(Date.now() + 3 * 3600e3)),
-    recipient: '', recipientPhone: '', address: '', mapsInput: '', fee: 0, card: '', notes: '', disc: 0, florist: '',
+    recipient: '', recipientPhone: '', address: '', mapsInput: '', fee: 0, card: '', notes: '', disc: 0, florist: '', floristId: '',
     method: 'Tunai', payType: 'lunas' as 'lunas' | 'dp' | 'nanti', dp: 0, received: 0, usePoints: false, register: false,
   });
+  const ready = f.fulfillment === 'sekarang';
   const [geo, setGeo] = useState<{ point: LatLng | null; km: number; source: 'ors' | 'osrm' | 'manual'; minutes?: number } | null>(null);
   const [geoBusy, setGeoBusy] = useState(false);
   const [manualKm, setManualKm] = useState<string | null>(null); // terisi bila rute jalan gagal / kasir memilih isi km sendiri
@@ -390,13 +393,15 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
         items, orderDiscount: f.disc + engage.reviewDiscount + pointsDisc, extraFee: fee,
         customer: { id: cust?.id || null, name: f.name, phone: f.phone || cust?.phone || '', registerMember: f.register && !cust?.member }, fulfillment: f.fulfillment, dueAt: dueIso,
         recipientName: f.recipient, recipientPhone: f.recipientPhone, deliveryAddress: f.address,
-        cardMessage: f.card, notes: f.notes, payMethod: f.method, payAmount, cashReceived: f.received || payAmount,
-        florist: f.florist, manualDiscount: f.disc, reviewDiscount: engage.reviewDiscount, reviewTier: engage.reviewTier, survey: engage.survey,
+        cardMessage: f.card, notes: ready ? '' : f.notes, payMethod: f.method, payAmount, cashReceived: f.received || payAmount,
+        // Ready = buket jadi, langsung diserahkan: tanpa perangkai
+        florist: ready ? '' : f.florist, floristId: ready ? '' : f.floristId, manualDiscount: f.disc, reviewDiscount: engage.reviewDiscount, reviewTier: engage.reviewTier, survey: engage.survey,
         pointsRedeemed: redeem, pointsDiscount: pointsDisc, pointsEarned: earn,
         delivery: f.fulfillment === 'antar' && geo ? { input: f.mapsInput, lat: geo.point?.lat ?? 0, lng: geo.point?.lng ?? 0, km: geo.km, km_source: geo.source, rate: cfg.delivery.rate, min: cfg.delivery.min } : null,
       };
       const order = await checkout(input);
-      const results = await printOrder(order, ['kasir', 'produksi'], { skipRelay: true });
+      // Ready tidak dirangkai: hanya struk pelanggan, tanpa tiket produksi
+      const results = await printOrder(order, ready ? ['kasir'] : ['kasir', 'produksi'], { skipRelay: true });
       onDone(order, results);
     } catch (e) {
       toast('Gagal menyimpan: ' + (e as Error).message, 'err');
@@ -481,13 +486,20 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
             </>
           )}
 
-          <div className="section-title">Perangkai</div>
-          <div className="chips" data-testid="florists">
-            <button className={!f.florist ? 'on' : ''} onClick={() => setF({ ...f, florist: '' })}>Belum ditunjuk</button>
-            {cfg.florists.map((n) => <button key={n} className={f.florist === n ? 'on' : ''} onClick={() => setF({ ...f, florist: n })}>{n}</button>)}
-          </div>
+          {ready ? (
+            <p className="muted small" data-testid="ready-info">Ready: buket sudah jadi dan langsung dibawa pelanggan, jadi tidak perlu menunjuk perangkai dan tidak mencetak tiket produksi.</p>
+          ) : (
+            <>
+              <div className="section-title">Perangkai</div>
+              <div className="chips" data-testid="florists">
+                <button className={!f.florist ? 'on' : ''} onClick={() => setF({ ...f, florist: '', floristId: '' })}>Belum ditunjuk</button>
+                {florists.map((x) => <button key={x.id || x.name} className={(x.id ? f.floristId === x.id : f.florist === x.name) ? 'on' : ''} onClick={() => setF({ ...f, florist: x.name, floristId: x.id || '' })}>{x.name}</button>)}
+              </div>
+              {!f.florist && <p className="field-hint warn" data-testid="florist-warn">Perangkai belum ditunjuk: pesanan tampil dengan peringatan di Produksi dan baru bisa dirangkai setelah ditunjuk.</p>}
+            </>
+          )}
           <Field label="Kartu ucapan"><textarea rows={2} value={f.card} onChange={(e) => setF({ ...f, card: e.target.value })} placeholder="Happy graduation, Rina!" data-testid="card" /></Field>
-          <Field label="Catatan untuk perangkai"><textarea rows={2} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="warna dominan pink, pita satin putih" data-testid="notes" /></Field>
+          {!ready && <Field label="Catatan untuk perangkai"><textarea rows={2} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="warna dominan pink, pita satin putih" data-testid="notes" /></Field>}
         </div>
 
         <div className="stack">
@@ -549,7 +561,7 @@ export function Success({ order, results, onClose }: { order: Order; results: Pr
             const r = res.find((x) => x.target === tg);
             return (
               <div key={tg} className={`print-row ${r && !r.ok ? 'bad' : ''}`} data-testid={`print-${tg}`}>
-                <div><b>{tg === 'kasir' ? 'Struk pelanggan' : 'Tiket produksi'}</b><div className="muted">{r ? label(r) : '-'}</div></div>
+                <div><b>{tg === 'kasir' ? 'Struk pelanggan' : 'Tiket produksi'}</b><div className="muted">{r ? label(r) : tg === 'produksi' && order.fulfillment === 'sekarang' ? 'tidak dicetak (Ready, tanpa produksi)' : '-'}</div></div>
                 <button className="btn" onClick={() => reprint(tg)}><Icon name="print" size={18} />Cetak ulang</button>
               </div>
             );

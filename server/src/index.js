@@ -23,10 +23,37 @@ import { createNotifier } from './notify.js';
 import { createEventSync, KINDS as EV_KINDS } from './evsync.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const VERSION = '1.9.0';
+export const VERSION = '1.10.0';
 
 const ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
 const ROLES = ['owner', 'kasir', 'perangkai'];
+/**
+ * Peran efektif akun (v1.10). Owner selalu tunggal. Pegawai boleh punya beberapa peran (Admin = kasir, Perangkai).
+ * Kolom `role` = peran utama untuk izin server: kasir bila punya peran kasir (izin kasir mencakup izin perangkai), selain itu perangkai.
+ */
+export function rolesOf(u) {
+  if (!u) return [];
+  if (u.role === 'owner') return ['owner'];
+  const rs = String(u.roles || '').split(',').map((r) => r.trim()).filter((r) => r === 'kasir' || r === 'perangkai');
+  return rs.length ? [...new Set(rs)] : [u.role];
+}
+export const primaryRole = (roles) => (roles.includes('owner') ? 'owner' : roles.includes('kasir') ? 'kasir' : 'perangkai');
+/** Normalkan masukan peran dari owner: ['owner'] atau gabungan kasir/perangkai (minimal satu). */
+function parseRoles(body) {
+  const raw = Array.isArray(body.roles) ? body.roles : body.role ? [body.role] : ['kasir'];
+  const rs = [...new Set(raw.map((r) => String(r)))];
+  if (rs.some((r) => !ROLES.includes(r))) return { error: 'Peran tidak dikenal' };
+  if (rs.includes('owner')) return rs.length === 1 ? { roles: ['owner'] } : { error: 'Owner tidak bisa digabung dengan peran lain' };
+  if (!rs.length) return { error: 'Pilih minimal satu peran: Admin atau Perangkai' };
+  return { roles: ['kasir', 'perangkai'].filter((r) => rs.includes(r)) };
+}
+/** Username dari nama: kata pertama, huruf kecil a–z/angka, minimal 3 karakter. */
+export function usernameFrom(name) {
+  const first = String(name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().split(/\s+/).find(Boolean) || 'staf';
+  const base = first.replace(/[^a-z0-9]/g, '') || 'staf';
+  return base.length >= 3 ? base.slice(0, 28) : `${base}${'staf'.slice(0, 3 - base.length)}`;
+}
+const RANGKAI = ['antri', 'dirangkai', 'siap'];
 // Kode perangkat = jenis + fungsi, mis. KK = Komputer Kasir. Bila sudah dipakai perangkat lain: KK2, KK3, ...
 export const DEVICE_KIND = { K: 'Komputer', H: 'HP', T: 'Tablet' };
 export const DEVICE_FN = { K: 'Kasir', R: 'Ruang Rangkai', O: 'Owner' };
@@ -95,7 +122,7 @@ export function createServer(opts = {}) {
     countUsers: db.prepare('SELECT COUNT(*) AS n FROM users'),
     userByName: db.prepare('SELECT * FROM users WHERE username = ?'),
     userById: db.prepare('SELECT * FROM users WHERE id = ?'),
-    listUsers: db.prepare('SELECT id, username, name, email, phone, birth_date, role, active, outlet_id, created_at, (pw_view IS NOT NULL) AS can_view FROM users ORDER BY created_at'),
+    listUsers: db.prepare('SELECT id, username, name, email, phone, birth_date, role, roles, active, outlet_id, created_at, (pw_view IS NOT NULL) AS can_view FROM users ORDER BY created_at'),
     setPwView: db.prepare('UPDATE users SET pw_view = ? WHERE id = ?'),
     insertUser: db.prepare('INSERT INTO users (id, username, name, role, pass, active, outlet_id, created_at, email) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)'),
     setPersonal: db.prepare('UPDATE users SET phone = ?, birth_date = ? WHERE id = ?'),
@@ -141,7 +168,7 @@ export function createServer(opts = {}) {
   }
 
   function mirrorUser(u) {
-    writeRecord('staff', u.id, { name: u.name, username: u.username, role: u.role, active: !!u.active, outlet_id: u.outlet_id || null }, null);
+    writeRecord('staff', u.id, { name: u.name, username: u.username, role: u.role, roles: rolesOf(u), active: !!u.active, outlet_id: u.outlet_id || null }, null);
   }
 
   /**
@@ -640,7 +667,7 @@ export function createServer(opts = {}) {
     return {
       token,
       instanceId: store.instanceId,
-      user: { id: u.id, name: u.name, username: u.username, role: u.role, outlet_id: u.outlet_id },
+      user: { id: u.id, name: u.name, username: u.username, role: u.role, roles: rolesOf(u), outlet_id: u.outlet_id },
       device: { id: dev.id, code: dev.code, name: dev.name, outlet_id: dev.outlet_id },
     };
   }
@@ -663,6 +690,26 @@ export function createServer(opts = {}) {
     return !o.void && o.total > 0 && Number(q.paidSum.get(orderId).s) >= o.total;
   }
   /** Aturan pembatalan untuk selain owner. Mengembalikan pesan galat bila ditolak. */
+  /**
+   * v1.10: status antri ⇄ dirangkai ⇄ siap hanya boleh diubah perangkai yang ditunjuk (florist_id).
+   * Pesanan lama tanpa florist_id tetapi bernama perangkai: akun berperan perangkai. Tanpa perangkai: tunjuk dulu.
+   * Pesanan Ready (fulfillment 'sekarang') lama yang masih di antrean tidak wajib ditunjuk.
+   */
+  function guardRangkai(c, id, patch, user) {
+    if (c !== 'orders' || !('production_status' in patch)) return null;
+    const row = q.getRec.get('orders', id);
+    if (!row) return null; // pesanan baru dari checkout
+    const cur = JSON.parse(row.data);
+    const to = patch.production_status;
+    if (to === cur.production_status || !RANGKAI.includes(to) || !RANGKAI.includes(cur.production_status)) return null;
+    const o = { ...cur, ...patch };
+    const roles = rolesOf(user);
+    if (o.florist_id) return o.florist_id === user.id ? null : `Hanya ${o.florist || 'perangkai yang ditunjuk'} yang bisa mengubah status pesanan ini`;
+    if (o.florist) return roles.includes('perangkai') ? null : 'Status antri/dirangkai dikonfirmasi perangkai yang ditunjuk';
+    if (o.fulfillment === 'sekarang') return roles.includes('perangkai') || roles.includes('owner') ? null : 'Status antri/dirangkai dikonfirmasi perangkai';
+    return 'Perangkai belum ditunjuk. Kasir atau owner perlu menunjuk perangkai dulu.';
+  }
+
   function guardCancel(c, id, patch, user) {
     if (c === 'orders') {
       if ((patch.void === true || patch.production_status === 'batal') && fullyPaid(id)) return 'Pesanan lunas hanya bisa dibatalkan owner. Ajukan pembatalan beserta alasan.';
@@ -723,6 +770,8 @@ export function createServer(opts = {}) {
           if (!q.getRec.get(c, id)) { results.push({ c, id, error: 'Tidak punya izin membuat data ini' }); continue; }
           patch = Object.fromEntries(Object.entries(patch).filter(([k]) => allowed.includes(k)));
         }
+        const rk = guardRangkai(c, id, patch, user);
+        if (rk) { results.push({ c, id, error: rk }); continue; }
         if (user.role !== 'owner') {
           const why = guardCancel(c, id, patch, user);
           if (why) { results.push({ c, id, error: why }); continue; }
@@ -753,25 +802,36 @@ export function createServer(opts = {}) {
       if (pw === null) throw new HttpError(404, target.pw_view ? 'Sandi tidak bisa dibuka (kunci server berganti). Atur ulang lewat tombol Sandi.' : 'Sandi dipilih sendiri oleh pengguna atau dibuat sebelum v1.6, jadi tidak tersimpan. Atur ulang lewat tombol Sandi agar bisa dilihat.');
       return { password: pw };
     }
-    if (method === 'GET') return { users: q.listUsers.all().map((u) => ({ ...u, can_view: !!u.can_view })) };
+    if (method === 'GET') return { users: q.listUsers.all().map((u) => ({ ...u, roles: rolesOf(u), can_view: !!u.can_view })) };
     if (method === 'POST') {
-      const { name, username, password, role = 'kasir', outlet_id, email = '', phone = '', birth_date = '' } = body;
-      if (!name || !username || !password) throw new HttpError(400, 'Nama, username, dan kata sandi wajib diisi');
-      if (!ROLES.includes(role)) throw new HttpError(400, 'Peran tidak dikenal');
+      const { name, outlet_id, email = '', phone = '', birth_date = '' } = body;
+      // generate: akun pegawai dibuat dari daftar Staff; username dari nama, sandi acak dibuat server (bisa dilihat owner)
+      const gen = body.generate === true;
+      let { username, password } = body;
+      if (!String(name || '').trim()) throw new HttpError(400, 'Nama wajib diisi');
+      if (gen) {
+        if (!username) { const base = usernameFrom(name); username = base; for (let i = 2; q.userByName.get(username); i++) username = `${base}${i}`; }
+        password = newPassword();
+      }
+      if (!username || !password) throw new HttpError(400, 'Nama, username, dan kata sandi wajib diisi');
+      const pr = parseRoles(body);
+      if (pr.error) throw new HttpError(400, pr.error);
+      const role = primaryRole(pr.roles);
       if (String(password).length < 6) throw new HttpError(400, 'Kata sandi minimal 6 karakter');
       const uname = String(username).trim().toLowerCase();
       if (!/^[a-z0-9._-]{3,32}$/.test(uname)) throw new HttpError(400, 'Username 3–32 karakter: huruf kecil, angka, titik, garis');
       if (q.userByName.get(uname)) throw new HttpError(409, 'Username sudah dipakai');
       const id = newId();
       store.tx(() => {
-        q.insertUser.run(id, uname, name, role, hashPassword(password), outlet_id || 'outlet-utama', now(), normEmail(email));
+        q.insertUser.run(id, uname, String(name).trim(), role, hashPassword(password), outlet_id || 'outlet-utama', now(), normEmail(email));
         q.setPwView.run(sealPassword(store.secret, password), id);
         q.setPersonal.run(cleanPhone(phone), cleanBirth(birth_date), id);
+        db.prepare('UPDATE users SET roles = ? WHERE id = ?').run(pr.roles.join(','), id);
         mirrorUser(q.userById.get(id));
       });
       broadcast();
       if (role === 'owner') evReconcileAll();
-      return { ok: true, id };
+      return { ok: true, id, username: uname, roles: pr.roles, ...(gen ? { password } : {}) };
     }
     if (method === 'PATCH' && parts[2]) {
       const target = q.userById.get(parts[2]);
@@ -779,10 +839,11 @@ export function createServer(opts = {}) {
       const sets = [];
       const vals = [];
       if (body.name) { sets.push('name = ?'); vals.push(String(body.name)); }
-      if (body.role) {
-        if (!ROLES.includes(body.role)) throw new HttpError(400, 'Peran tidak dikenal');
-        if (target.id === user.id && body.role !== 'owner') throw new HttpError(400, 'Owner tidak bisa menurunkan perannya sendiri');
-        sets.push('role = ?'); vals.push(body.role);
+      if (body.role || Array.isArray(body.roles)) {
+        const pr = parseRoles(body);
+        if (pr.error) throw new HttpError(400, pr.error);
+        if (target.id === user.id && !pr.roles.includes('owner')) throw new HttpError(400, 'Owner tidak bisa menurunkan perannya sendiri');
+        sets.push('role = ?', 'roles = ?'); vals.push(primaryRole(pr.roles), pr.roles.join(','));
       }
       if (typeof body.active === 'boolean') {
         if (target.id === user.id && !body.active) throw new HttpError(400, 'Owner tidak bisa menonaktifkan dirinya sendiri');
@@ -802,7 +863,7 @@ export function createServer(opts = {}) {
         mirrorUser(q.userById.get(target.id));
       });
       broadcast();
-      if (target.role === 'owner' || body.role === 'owner') evReconcileAll(); // email owner = penerima kalender event
+      if (target.role === 'owner' || body.role === 'owner' || body.roles?.includes?.('owner')) evReconcileAll(); // email owner = penerima kalender event
       return { ok: true };
     }
     throw new HttpError(405, 'Metode tidak didukung');
@@ -849,7 +910,7 @@ export function createServer(opts = {}) {
       if (route === 'POST /api/auth/forgot') return send(res, 200, await handleForgot(await readJson(req), req));
       if (route === 'POST /api/auth/reset') return send(res, 200, handleReset(await readJson(req)));
       const user = authUser(req, url);
-      if (route === 'GET /api/auth/me') return send(res, 200, { user: { id: user.id, name: user.name, username: user.username, role: user.role, outlet_id: user.outlet_id }, device: q.deviceById.get(user.deviceId) || null });
+      if (route === 'GET /api/auth/me') return send(res, 200, { user: { id: user.id, name: user.name, username: user.username, role: user.role, roles: rolesOf(user), outlet_id: user.outlet_id }, device: q.deviceById.get(user.deviceId) || null });
       if (route === 'POST /api/auth/self-reset') return send(res, 200, await handleSelfReset(user, await readJson(req)));
       if (route === 'GET /api/sync/pull') return send(res, 200, handlePull(url, user));
       if (route === 'POST /api/sync/push') return send(res, 200, handlePush(user, await readJson(req)));

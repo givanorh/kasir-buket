@@ -100,8 +100,11 @@ export function createNotifier(deps) {
   function emailFor(cfg, florist) {
     const k = norm(florist);
     if (!k) return null;
-    for (const [name, email] of Object.entries(cfg.contacts)) if (norm(name) === k && email) return String(email).toLowerCase();
-    return null;
+    const list = Object.entries(cfg.contacts).filter(([, email]) => email);
+    const hit = list.find(([name]) => norm(name) === k)
+      // v1.10: nama akun ("Iin") dan nama lama di daftar perangkai ("Iin Ruslinda") dicocokkan lewat nama depan
+      || list.find(([name]) => norm(name).split(/\s+/)[0] === k.split(/\s+/)[0]);
+    return hit ? String(hit[1]).toLowerCase() : null;
   }
   const uidFor = (orderId, email) => `kb-${orderId}-${sha(email).slice(0, 10)}@kasir-buket`;
 

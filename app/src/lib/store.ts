@@ -125,6 +125,7 @@ export interface CheckoutInput {
   payAmount: number; // nominal yang dicatat sebagai pembayaran (≤ total)
   cashReceived: number; // uang diterima (tunai), untuk kembalian
   florist?: string;
+  floristId?: string;
   delivery?: Order['delivery'];
   manualDiscount?: number;
   pointsRedeemed?: number;
@@ -183,10 +184,13 @@ export async function checkout(inp: CheckoutInput): Promise<Order> {
     delivery_address: inp.deliveryAddress,
     card_message: inp.cardMessage,
     notes: inp.notes,
-    production_status: 'antri',
+    // Ready (buket jadi, langsung dibawa): tidak masuk antrean rangkai. Lunas = selesai; belum lunas = siap (tagih pelunasan).
+    production_status: inp.fulfillment === 'sekarang' ? (payAmount >= t.total ? 'selesai' : 'siap') : 'antri',
+    ...(inp.fulfillment === 'sekarang' ? { ready_at: ts, ...(payAmount >= t.total ? { done_at: ts } : {}) } : {}),
     source: 'app',
     created_at: ts,
-    florist: inp.florist || '',
+    florist: inp.fulfillment === 'sekarang' ? '' : inp.florist || '',
+    florist_id: inp.fulfillment === 'sekarang' ? null : inp.floristId || null,
     delivery: inp.fulfillment === 'antar' ? inp.delivery || null : null,
     manual_discount: inp.manualDiscount || 0,
     points_redeemed: isMember ? inp.pointsRedeemed || 0 : 0,

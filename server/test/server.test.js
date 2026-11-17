@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createServer, uaInfo } from '../src/index.js';
+import { createServer, uaInfo, usernameFrom, rolesOf } from '../src/index.js';
 
 let srv, store, base, dir;
 const json = async (method, p, body, token) => {
@@ -85,7 +85,7 @@ test('push/pull: merge per kolom, nomor urut naik, izin per peran', async () => 
   r = await json('POST', '/api/sync/push', { changes: [{ c: 'products', id: 'p-001', patch: { name: 'Buket Mawar', price: 150000, cost: 90000 } }] }, owner);
   assert.ok(r.body.results[0].seq > head0);
   r = await json('POST', '/api/sync/push', {
-    changes: [{ c: 'orders', id: 'o-001', patch: { no: '251115-A001', total: 150000, production_status: 'antri', notes: 'pita merah' } }],
+    changes: [{ c: 'orders', id: 'o-001', patch: { no: '251115-A001', total: 150000, production_status: 'antri', notes: 'pita merah', florist: 'Perangkai 1' } }],
   }, kasir);
   assert.ok(r.body.results[0].seq);
   // perangkai hanya boleh mengubah kolom produksi; kolom lain dibuang
@@ -382,4 +382,57 @@ test('v1.9 reset sandi mandiri kasir/perangkai: verifikasi email + No HP + tangg
   for (let i = 0; i < 5; i++) assert.equal((await json('POST', '/api/auth/self-reset', { email: 'sari@example.com', phone: '081311112222', birth_date: '2001-08-18' }, perangkai)).status, 400);
   assert.equal((await json('POST', '/api/auth/self-reset', { email: 'sari@example.com', phone: '081311112222', birth_date: '2001-08-17' }, perangkai)).status, 429);
   smtp.close();
+});
+
+
+test('v1.10 peran ganda pegawai: Admin + Perangkai; owner tunggal; akun dibuat dari daftar Staff dengan sandi acak', async () => {
+  assert.equal(usernameFrom('Iin Ruslinda'), 'iin');
+  assert.equal(usernameFrom('Ré'), 'res', 'aksen dibuang, minimal 3 karakter');
+  assert.deepEqual(rolesOf({ role: 'kasir', roles: 'kasir,perangkai' }), ['kasir', 'perangkai']);
+  assert.deepEqual(rolesOf({ role: 'perangkai', roles: null }), ['perangkai'], 'akun lama tanpa kolom roles');
+  assert.deepEqual(rolesOf({ role: 'owner', roles: 'kasir' }), ['owner']);
+  assert.equal((await json('POST', '/api/users', { name: 'X', generate: true, roles: ['owner', 'kasir'] }, owner)).status, 400, 'owner tidak bisa digabung');
+  assert.equal((await json('POST', '/api/users', { name: 'X', generate: true, roles: [] }, owner)).status, 400, 'minimal satu peran');
+  const iin = await json('POST', '/api/users', { name: 'Iin Ruslinda', generate: true, roles: ['perangkai', 'kasir'] }, owner);
+  assert.equal(iin.status, 200);
+  assert.equal(iin.body.username, 'iin');
+  assert.deepEqual(iin.body.roles, ['kasir', 'perangkai']);
+  assert.match(iin.body.password, /^[A-Za-z0-9]{10}$/);
+  const iin2 = await json('POST', '/api/users', { name: 'Iin', generate: true, roles: ['perangkai'] }, owner);
+  assert.equal(iin2.body.username, 'iin2', 'username kembar diberi angka');
+  assert.equal((await json('GET', `/api/users/${iin.body.id}/password`, null, owner)).body.password, iin.body.password, 'sandi acak bisa dilihat owner');
+  const login = await json('POST', '/api/auth/login', { username: 'iin', password: iin.body.password, deviceId: 'dev-iin' });
+  assert.equal(login.body.user.role, 'kasir', 'peran utama = kasir (izin kasir mencakup perangkai)');
+  assert.deepEqual(login.body.user.roles, ['kasir', 'perangkai']);
+  const pull = await json('GET', '/api/sync/pull?since=0', null, owner);
+  assert.deepEqual(pull.body.changes.filter((c) => c.c === 'staff' && c.id === iin.body.id).pop().data.roles, ['kasir', 'perangkai'], 'peran ganda ikut sinkron ke koleksi staff');
+  // ubah peran: hanya Perangkai
+  assert.equal((await json('PATCH', `/api/users/${iin2.body.id}`, { roles: ['kasir', 'perangkai'] }, owner)).status, 200);
+  const u2 = (await json('GET', '/api/users', null, owner)).body.users.find((u) => u.id === iin2.body.id);
+  assert.deepEqual([u2.role, u2.roles], ['kasir', ['kasir', 'perangkai']]);
+});
+
+test('v1.10 status antri/dirangkai hanya oleh perangkai yang ditunjuk; tanpa perangkai harus ditunjuk dulu', async () => {
+  const users = (await json('GET', '/api/users', null, owner)).body.users;
+  const sari = users.find((u) => u.username === 'rangkai1');
+  const iin = users.find((u) => u.username === 'iin');
+  const iinTok = (await json('POST', '/api/auth/login', { username: 'iin', password: (await json('GET', `/api/users/${iin.id}/password`, null, owner)).body.password, deviceId: 'dev-iin' })).body.token;
+  const push = (tok, id, patch) => json('POST', '/api/sync/push', { changes: [{ c: 'orders', id, patch }] }, tok).then((r) => r.body.results[0]);
+  // pesanan tanpa perangkai: tidak ada yang bisa memulai rangkai
+  assert.ok((await push(kasir, 'o-tunjuk', { no: '261117-KK901', total: 100000, production_status: 'antri', fulfillment: 'ambil' })).seq);
+  assert.match((await push(perangkai, 'o-tunjuk', { production_status: 'dirangkai' })).error, /belum ditunjuk/);
+  assert.match((await push(owner, 'o-tunjuk', { production_status: 'dirangkai' })).error, /belum ditunjuk/);
+  // perangkai tidak bisa menunjuk dirinya sendiri (kolom florist bukan kolom produksi)
+  await push(perangkai, 'o-tunjuk', { florist: 'Perangkai 1', florist_id: sari.id });
+  assert.match((await push(perangkai, 'o-tunjuk', { production_status: 'dirangkai' })).error, /belum ditunjuk/);
+  // kasir menunjuk Iin: hanya Iin yang bisa memulai; Sari (perangkai lain) dan owner ditolak
+  assert.ok((await push(kasir, 'o-tunjuk', { florist: 'Iin Ruslinda', florist_id: iin.id })).seq);
+  assert.match((await push(perangkai, 'o-tunjuk', { production_status: 'dirangkai' })).error, /Hanya Iin Ruslinda/);
+  assert.match((await push(owner, 'o-tunjuk', { production_status: 'dirangkai' })).error, /Hanya Iin Ruslinda/);
+  assert.ok((await push(iinTok, 'o-tunjuk', { production_status: 'dirangkai' })).seq);
+  assert.ok((await push(iinTok, 'o-tunjuk', { production_status: 'siap' })).seq);
+  // siap → selesai (diambil) bukan bagian rangkai: kasir boleh
+  assert.ok((await push(kasir, 'o-tunjuk', { production_status: 'selesai' })).seq);
+  const o = (await json('GET', '/api/sync/pull?since=0', null, owner)).body.changes.filter((c) => c.id === 'o-tunjuk').pop().data;
+  assert.deepEqual([o.production_status, o.florist_id], ['selesai', iin.id]);
 });
