@@ -76,11 +76,18 @@ Buka `https://kasir.domainanda.com`, lakukan penyiapan toko (sekali saja).
    git push -u origin main
    ```
 3. Buka tab **Actions**. Workflow “Build APK Android” berjalan otomatis (sekitar 5–8 menit). Bila tidak, pilih workflow itu › Run workflow.
-4. Setelah selesai (centang hijau), buka run tersebut › bagian Artifacts › unduh `kasir-buket-apk` (zip berisi `kasir-buket-<nomor>.apk`).
-5. Kirim APK ke HP, buka, izinkan “Instal aplikasi tidak dikenal”.
-6. Saat pertama dibuka, isi alamat server `https://kasir.domainanda.com`, lalu login.
+4. Setelah selesai (centang hijau), APK terbit otomatis di halaman **Releases** repositori (`Kasir Buket v<versi>` › Assets › `kasir-buket-v<versi>.apk`). Salinannya juga ada di run tersebut › Artifacts › `kasir-buket-apk`.
+5. Buka halaman Releases dari HP, unduh APK, buka, izinkan “Instal aplikasi tidak dikenal”.
+6. Alamat server sudah terisi otomatis (lihat 4.4), lalu login.
 
-APK ditandatangani kunci tetap (`app/android/app/debug.keystore`), sehingga APK versi berikutnya bisa dipasang menimpa versi lama tanpa uninstall. Nomor versi naik otomatis tiap build.
+APK ditandatangani kunci tetap (`app/android/app/debug.keystore`), sehingga APK versi berikutnya bisa dipasang menimpa versi lama tanpa uninstall. Kode versi Android = nomor run (naik tiap build); nama versi = `version` di `app/package.json`. Push dengan versi yang sama mengganti berkas APK di rilis yang sama; versi baru membuat rilis baru.
+
+### 4.4. Alamat server bawaan APK (ngrok sementara, lalu VPS)
+1. Saat build, workflow menanam alamat server ke APK: variabel repositori `KB_SERVER_URL` (GitHub › Settings › Secrets and variables › Actions › Variables). Bila variabel itu kosong, dipakai tunnel ngrok toko `https://daydream-vowel-snaking.ngrok-free.dev`.
+2. Selama memakai ngrok: komputer server dan jendela ngrok (`ngrok http http://localhost:8080 --url https://daydream-vowel-snaking.ngrok-free.dev`) harus menyala. Bila mati, aplikasi tetap bisa transaksi offline dan mengirim data begitu tunnel hidup lagi.
+3. Saat pindah ke VPS: isi `KB_SERVER_URL` dengan alamat VPS (mis. `https://kasir.domainanda.com`), jalankan ulang workflow (Actions › Build APK Android › Run workflow), lalu pasang APK baru menimpa yang lama. Perangkat yang masih memakai alamat bawaan lama otomatis pindah ke alamat baru; alamat yang diketik manual di layar masuk tidak diubah.
+4. Alamat tetap bisa diganti manual di layar masuk (kolom **Alamat server**) tanpa build ulang.
+5. Kuota ngrok gratis 20.000 permintaan/bulan. Lewat ngrok, saluran SSE dibuka dengan `fetch` + header `ngrok-skip-browser-warning` (EventSource tidak bisa mengirim header dan akan dibelokkan ke halaman peringatan ngrok), sehingga polling cadangan cukup 5 menit sekali: ± 12 permintaan/jam per perangkat saat diam, ditambah permintaan saat ada transaksi.
 
 ### 4.2. Lewat Android Studio di PC
 ```bash
@@ -276,6 +283,12 @@ Sinkron berjalan sendiri. Lencana di kanan atas: hijau “Tersinkron”, kuning 
 5. **Belum ditunjuk**: bila kasir/owner memilih "Belum ditunjuk" saat checkout, muncul peringatan di formulir, dan kartu pesanan di kolom Antri diberi label merah **Perangkai belum ditunjuk** dengan tombol **Tunjuk perangkai** (hanya Admin/owner). Perangkai tidak bisa menunjuk dirinya sendiri.
 6. Pesanan lama yang perangkainya tercatat sebagai nama (tanpa akun) dicocokkan ke akun lewat nama depan; bila tidak ada akun yang cocok, akun berperan Perangkai mana pun bisa memprosesnya.
 
+## 8h. Versi 1.10.1 (APK di GitHub Releases)
+1. APK terbit otomatis di halaman Releases setiap kali kode aplikasi di-push (bagian 4.1).
+2. Alamat server bawaan APK = tunnel ngrok toko, bisa diganti lewat variabel `KB_SERVER_URL` saat pindah ke VPS (bagian 4.4).
+3. Lewat ngrok, pemberitahuan data baru (SSE) kini tersambung juga dari APK, sehingga perubahan dari perangkat lain muncul dalam hitungan detik tanpa menghabiskan kuota ngrok.
+4. Versi web lewat ngrok: berkas manifest dimuat dengan cookie sehingga tidak lagi tercatat galat `ERR_NGROK_6024` di Traffic Inspector ngrok.
+
 ## 9. Lupa Kata Sandi
 1. **Lewat email (disarankan).** Owner mengatur sekali: Pengaturan › Reset Password › Email Reset › isi **Akun GMAIL Toko** dan **Pass Email Toko** (*app password*: Akun Google › Keamanan › Verifikasi 2 Langkah aktif › myaccount.google.com/apppasswords) › Simpan › **Tes Email**. Lalu isi email tiap pengguna di Pengaturan › Pengguna. Di halaman masuk, ketuk **Lupa kata sandi?**, masukkan username atau email, masukkan kode 6 digit dari email (berlaku 15 menit), lalu buat sandi baru.
 2. **Staf lupa sandi**: owner cukup menekan tombol **Sandi** di Pengaturan › Pengguna.
@@ -298,6 +311,10 @@ Setiap basis data punya ID unik. Bila perangkat masuk ke server dengan ID berbed
 - **Caddy**: server web yang otomatis memasang sertifikat HTTPS.
 - **systemd**: pengelola layanan Linux; menjalankan server otomatis saat VPS menyala dan memulai ulang bila berhenti.
 - **Artifact (GitHub Actions)**: berkas hasil build yang bisa diunduh dari halaman run.
+- **GitHub Release**: halaman unduhan versi aplikasi di repositori (tab Releases), berisi catatan rilis dan berkas (Assets) seperti APK.
+- **Variabel repositori (Actions variable)**: nilai konfigurasi yang dibaca workflow saat build, diatur di Settings tanpa mengubah kode.
+- **SSE (Server-Sent Events)**: satu sambungan HTTP yang dibiarkan terbuka; server mengirim pemberitahuan "ada data baru" lewat sambungan itu.
+- **ERR_NGROK_6024**: halaman peringatan ngrok gratis untuk permintaan dari peramban tanpa header `ngrok-skip-browser-warning` atau cookie ngrok.
 - **Stasiun cetak**: perangkat yang otomatis mencetak tugas cetak kiriman perangkat lain.
 - **Event rutin**: event yang diproyeksikan ke setiap tahun pada tanggal dan bulan yang sama tanpa perlu disalin manual.
 - **Budget diskon ulasan**: batas total nominal diskon ulasan dalam satu bulan kalender; sisa = budget − Σ diskon ulasan transaksi tidak void bulan itu.

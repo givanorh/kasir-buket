@@ -23,7 +23,7 @@ import { createNotifier } from './notify.js';
 import { createEventSync, KINDS as EV_KINDS } from './evsync.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const VERSION = '1.10.0';
+export const VERSION = '1.10.1';
 
 const ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
 const ROLES = ['owner', 'kasir', 'perangkai'];

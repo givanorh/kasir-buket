@@ -10,6 +10,7 @@ import { useSyncExternalStore } from 'react';
 import { db, getMeta, setMeta } from './db';
 import { api, ApiError, applyDeviceRecord, applyStaffRecord, getSession, logout, updateSession } from './session';
 import { COLLECTIONS } from './types';
+import { fetchEvents } from './sse';
 
 export interface SyncStatus {
   online: boolean; syncing: boolean; pending: number; lastSync: number | null; error: string | null; authError: boolean; cursor: number;
@@ -31,7 +32,7 @@ class SyncEngine {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private backoff = 2000;
-  private es: EventSource | null = null;
+  private closeEvents: (() => void) | null = null;
   private started = false;
   private sseAt = 0; // denyut SSE terakhir
   private pullAt = 0; // sinkron berhasil terakhir
@@ -40,7 +41,12 @@ class SyncEngine {
   private set(p: Partial<SyncStatus>) { this.status = { ...this.status, ...p }; this.listeners.forEach((l) => l()); }
 
   private onOnline = () => this.run();
-  private onVisible = () => { if (document.visibilityState === 'visible') this.run(); };
+  private onVisible = () => {
+    if (document.visibilityState !== 'visible') return;
+    // HP sering memutus sambungan saat aplikasi di latar belakang: sambung ulang SSE bila denyutnya sudah hilang
+    if (this.started && Date.now() - this.sseAt > SSE_ALIVE_MS) this.connectEvents();
+    this.run();
+  };
 
   async start() {
     if (this.started) return;
@@ -62,25 +68,41 @@ class SyncEngine {
     window.removeEventListener('focus', this.onOnline);
     if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.retryTimer) clearTimeout(this.retryTimer);
-    this.es?.close();
-    this.es = null;
+    this.closeEvents?.();
+    this.closeEvents = null;
   }
 
   private connectEvents() {
     const s = getSession();
-    if (!s.token || !s.serverUrl || typeof EventSource === 'undefined') return;
-    this.es?.close();
-    const es = new EventSource(`${s.serverUrl.replace(/\/+$/, '')}/api/events?token=${encodeURIComponent(s.token)}`);
-    es.addEventListener('seq', (ev) => {
+    this.closeEvents?.();
+    this.closeEvents = null;
+    if (!s.token || !s.serverUrl) return;
+    const base = s.serverUrl.replace(/\/+$/, '');
+    const url = `${base}/api/events?token=${encodeURIComponent(s.token)}`;
+    const onSeq = (data: string) => {
       this.sseAt = Date.now();
       try {
-        const { seq } = JSON.parse((ev as MessageEvent).data);
+        const { seq } = JSON.parse(data);
         if (seq > this.status.cursor) this.run();
       } catch { /* abaikan */ }
-    });
-    es.onopen = () => { this.sseAt = Date.now(); if (!this.status.online) this.run(); };
+    };
+    const onOpen = () => { this.sseAt = Date.now(); if (!this.status.online) this.run(); };
+    const ngrok = /ngrok/i.test(base);
+    if (ngrok || typeof EventSource === 'undefined') {
+      // Lewat ngrok: EventSource tidak bisa mengirim header ngrok-skip-browser-warning sehingga dibelokkan ke halaman
+      // peringatan (ERR_NGROK_6024). fetch bisa mengirimnya (lihat sse.ts). Setelah pindah ke VPS kembali ke EventSource.
+      this.closeEvents = fetchEvents(url, ngrok ? { 'ngrok-skip-browser-warning': '1' } : {}, {
+        onOpen,
+        onEvent: (e) => { if (e.event === 'seq') onSeq(e.data); },
+        onError: () => { this.sseAt = 0; },
+      });
+      return;
+    }
+    const es = new EventSource(url);
+    es.addEventListener('seq', (ev) => onSeq((ev as MessageEvent).data));
+    es.onopen = onOpen;
     es.onerror = () => { this.sseAt = 0; };
-    this.es = es;
+    this.closeEvents = () => es.close();
   }
 
   /**

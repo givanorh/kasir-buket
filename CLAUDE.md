@@ -13,7 +13,7 @@ node server/src/index.js                   # http://localhost:8080 (env: PORT, H
 
 # aplikasi
 cd app && npm ci
-npm test                                   # 42 uji logika (tsx + node:test; fixture test/fixtures/belanja.xlsx)
+npm test                                   # 46 uji logika (tsx + node:test; fixture test/fixtures/belanja.xlsx)
 npm run build                              # tsc --noEmit && vite build -> app/dist
 npm run dev                                # vite, proxy /api ke :8080
 npx cap sync android                       # salin dist ke proyek Android
@@ -34,7 +34,8 @@ Selalu jalankan `server: npm test`, `app: npm test && npm run build`, dan `node 
 - `app/android/app/src/main/java/id/kasirbuket/app/ThermalPrinterPlugin.java` — plugin native: `listPaired`, `printBluetooth` (SPP), `printTcp` (port 9100).
 - `tools/ekspor-kasirpintar.js` — skrip Console untuk ekspor data dari back office Kasir Pintar.
 - `deploy/perbarui.bat` + `deploy/perbarui.mjs` — pembaruan sekali klik di PC toko (Windows): build, cadangan basis data, mulai ulang server, commit, push; catatan di `deploy/perbarui.log`. Berkas baru hanya ikut commit bila lolos `safeNewFile` (repositori publik). Pesan commit sekali pakai dibaca dari `deploy/pesan-commit.txt` (di-.gitignore).
-- `.github/workflows/android.yml` — build APK debug (kunci tetap `app/android/app/debug.keystore`).
+- `.github/workflows/android.yml` — build APK debug (kunci tetap `app/android/app/debug.keystore`), lalu job `release` menerbitkan `kasir-buket-v<versi>.apk` ke GitHub Releases (tag `v<version app/package.json>`; versi sama = APK diganti `--clobber`). Alamat server bawaan APK = `vars.KB_SERVER_URL`, cadangan tunnel ngrok toko, ditanam lewat `VITE_DEFAULT_SERVER`.
+- `app/src/lib/server-url.ts` (`BUILD_SERVER`, `pickServerUrl`) dan `app/src/lib/sse.ts` (`sseParser`, `fetchEvents`: SSE lewat fetch dengan header).
 
 ## Invarian yang tidak boleh rusak
 1. **Offline-first.** UI hanya membaca/menulis IndexedDB. Semua tulis lewat `save()`/`saveMany()` di `store.ts` (tabel lokal + `outbox`). Jangan memanggil API untuk data bisnis dari halaman.
@@ -78,6 +79,8 @@ Selalu jalankan `server: npm test`, `app: npm test && npm run build`, dan `node 
 39. **Peran ganda** (v1.10): `users.roles` = "kasir,perangkai" (owner selalu tunggal); `users.role` = peran utama (`primaryRole`: owner > kasir > perangkai) dan dipakai semua izin server (`RULES`, kolom perangkai). Koleksi `staff`, login, dan `/api/auth/me` membawa `roles`; klien memperbarui sesi dari rekaman `staff` milik sendiri (`applyStaffRecord`). Daftar perangkai = `floristList(staff)`; jangan membaca `settings.florists` langsung kecuali sebagai cadangan.
 40. **Ready** (`fulfillment: 'sekarang'`): tanpa perangkai, tanpa tiket produksi; checkout memberi status `selesai` (lunas) atau `siap` (belum lunas), tidak pernah `antri`.
 41. **Akun dari daftar gaji**: `POST /api/users { generate: true, name, roles }` → username dari nama depan (`usernameFrom`, kembar diberi angka), sandi acak `newPassword()` dikembalikan sekali dan disimpan di `pw_view`. Asisten tidak pernah memilih sandi akun pengguna.
+42. **Alamat server bawaan** (v1.10.1): web = asal halaman; APK = `VITE_DEFAULT_SERVER` saat build (`pickServerUrl`). Alamat tersimpan dipertahankan, kecuali sama dengan bawaan build sebelumnya (meta `serverUrlDefault`) dan build baru membawa bawaan lain: ikut pindah dan disimpan. Build tanpa bawaan tidak menghapus alamat tersimpan.
+43. **SSE lewat ngrok** memakai `fetchEvents` (fetch + header `ngrok-skip-browser-warning`), bukan EventSource (tidak bisa mengirim header, dibelokkan ke ERR_NGROK_6024). Sambung ulang 3 dtk × 2ⁿ maks. 60 dtk; 401/403 menghentikan sambung ulang. Selain ngrok tetap EventSource.
 
 ## Batasan lingkungan
 - Android SDK/Gradle tidak tersedia di container (dl.google.com, maven.google.com diblokir). APK dibangun oleh GitHub Actions atau Android Studio di PC pengguna. Perubahan Java cukup dicek dengan `javac` terhadap stub API.
@@ -91,9 +94,9 @@ Selalu jalankan `server: npm test`, `app: npm test && npm run build`, dan `node 
 - Gaya komunikasi dengan Vano: lugas, teknis/matematis, singkatan diberi kepanjangan di awal, istilah dijelaskan di akhir, tampilkan langkah hitung dan rekonsiliasi, hindari penghubung " —".
 
 ## Status & backlog
-Versi 1.10 selesai dan seluruh uji lulus (v1.10: Ready tanpa perangkai/tiket, tab Staff + peran ganda + akun dari daftar gaji, hanya perangkai yang ditunjuk mengonfirmasi rangkai, peringatan & tombol Tunjuk perangkai; v1.9: konfirmasi tutup shift, pengingat shift saat keluar, reset sandi mandiri kasir/perangkai, menu perangkai + Riwayat tanpa nominal, arah urut kalender, dua laci kas; v1.8: label Ready/Deadline, login tanpa pilihan perangkat + daftar perangkat & riwayat login untuk owner, penolakan server ditangani otomatis + ID impor cadangan, polling adaptif; v1.7: menu Riwayat hanya catatan di bawah Produksi, tombol Bayar pelunasan + struk pelunasan, wewenang tombol status per peran, pesan galat ngrok; v1.6: Perhitungan HPP + gaji & biaya, kalender kategori & urut omzet, sinkron Google Calendar owner, lihat sandi, tab Reset Password; v1.5: checkout nomor HP dulu, gerbang shift, event rutin, diskon ulasan dengan budget & kolom, animasi & pola; v1.3: notifikasi & kalender perangkai, ORS, bank survei, kode perangkat, tata letak; v1.4: tombol −/+ di kartu, member, persetujuan pembatalan, peringatan H-1, kalender event & analisis omzet, belanja bahan + unggah CSV/Excel, dasar HPP). Belum teruji dengan layanan sungguhan dari container: Gmail/Google Calendar, OpenRouteService, link pendek Google Maps. Kandidat berikutnya (belum dikerjakan):
+Versi 1.10.1 selesai dan seluruh uji lulus (v1.10.1: APK terbit di GitHub Releases, alamat server bawaan APK = tunnel ngrok, SSE lewat fetch untuk ngrok; v1.10: Ready tanpa perangkai/tiket, tab Staff + peran ganda + akun dari daftar gaji, hanya perangkai yang ditunjuk mengonfirmasi rangkai, peringatan & tombol Tunjuk perangkai; v1.9: konfirmasi tutup shift, pengingat shift saat keluar, reset sandi mandiri kasir/perangkai, menu perangkai + Riwayat tanpa nominal, arah urut kalender, dua laci kas; v1.8: label Ready/Deadline, login tanpa pilihan perangkat + daftar perangkat & riwayat login untuk owner, penolakan server ditangani otomatis + ID impor cadangan, polling adaptif; v1.7: menu Riwayat hanya catatan di bawah Produksi, tombol Bayar pelunasan + struk pelunasan, wewenang tombol status per peran, pesan galat ngrok; v1.6: Perhitungan HPP + gaji & biaya, kalender kategori & urut omzet, sinkron Google Calendar owner, lihat sandi, tab Reset Password; v1.5: checkout nomor HP dulu, gerbang shift, event rutin, diskon ulasan dengan budget & kolom, animasi & pola; v1.3: notifikasi & kalender perangkai, ORS, bank survei, kode perangkat, tata letak; v1.4: tombol −/+ di kartu, member, persetujuan pembatalan, peringatan H-1, kalender event & analisis omzet, belanja bahan + unggah CSV/Excel, dasar HPP). Belum teruji dengan layanan sungguhan dari container: Gmail/Google Calendar, OpenRouteService, link pendek Google Maps. Kandidat berikutnya (belum dikerjakan):
 1. Resep bahan baku (BOM) per buket untuk memotong stok bahan otomatis.
 2. Struk digital via WhatsApp.
 3. QRIS dinamis via payment gateway.
-4. Setelah server pindah ke VPS: hapus sisa khusus ngrok (pesan `ERR_NGROK_*` di `rules.ts`, header di `session.ts`, izin CORS di `index.js`).
+4. Setelah server pindah ke VPS: isi variabel repositori `KB_SERVER_URL` dengan alamat VPS dan build ulang APK, lalu hapus sisa khusus ngrok (pesan `ERR_NGROK_*` di `rules.ts`, header di `session.ts`, cabang `fetchEvents` untuk ngrok di `sync.ts`, cadangan URL ngrok di `android.yml`, izin CORS di `index.js`).
 5. Rilis Play Store (kunci rilis via env `KB_KEYSTORE`, `KB_STORE_PASSWORD`, `KB_KEY_ALIAS`, `KB_KEY_PASSWORD`; sudah didukung di `app/android/app/build.gradle`).

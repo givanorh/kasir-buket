@@ -5,6 +5,7 @@ import { db, getMeta, resetLocalData, setMeta } from './db';
 import type { Role } from './types';
 import { proxyMessage } from './rules';
 import { guessKind } from './device';
+import { BUILD_SERVER, pickServerUrl } from './server-url';
 
 export interface SessionUser { id: string; name: string; username: string; role: Role; roles?: Role[]; outlet_id?: string }
 export interface SessionDevice { id: string; code: string; name?: string; outlet_id?: string }
@@ -22,9 +23,16 @@ export async function loadSession(): Promise<Session> {
     deviceId = 'dev-' + randomId(12);
     await setMeta('deviceId', deviceId);
   }
-  const defaultUrl = isNative() ? '' : window.location.origin;
+  const native = isNative();
+  const stored = await getMeta<string>('serverUrl', '');
+  const prevDefault = await getMeta<string>('serverUrlDefault', '');
+  const serverUrl = pickServerUrl({ native, stored, prevDefault, buildDefault: BUILD_SERVER, origin: window.location.origin });
+  if (native) {
+    if (serverUrl !== stored && stored) await setMeta('serverUrl', serverUrl);
+    if (prevDefault !== BUILD_SERVER) await setMeta('serverUrlDefault', BUILD_SERVER);
+  }
   session = {
-    serverUrl: await getMeta<string>('serverUrl', defaultUrl),
+    serverUrl,
     token: await getMeta<string | null>('token', null),
     user: await getMeta<SessionUser | null>('user', null),
     device: await getMeta<SessionDevice | null>('device', null),
