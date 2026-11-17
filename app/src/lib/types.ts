@@ -11,7 +11,7 @@ export interface Base {
 
 export interface Outlet extends Base { name: string; address?: string; phone?: string; code?: string; active?: boolean; location?: { lat: number; lng: number } | null; maps_input?: string }
 export interface Staff extends Base { name: string; username: string; role: Role; active: boolean; outlet_id?: string | null }
-export interface Device extends Base { code: string; name?: string; user_id?: string; outlet_id?: string; last_seen?: string }
+export interface Device extends Base { code: string; name?: string; user_id?: string; outlet_id?: string; last_seen?: string; /** ringkasan browser + sistem, diisi server saat login */ ua?: string }
 
 export interface ExpenseCategory { name: string; biaya: boolean }
 export interface Settings extends Base {

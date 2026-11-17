@@ -153,7 +153,7 @@ function Card({ o, col, role, due, onOpen, onPay }: {
       {o.cancel_request?.status === 'pending' && <div className="bc-flag red">Pengajuan batal menunggu owner</div>}
       <div className="bc-top" onClick={onOpen}>
         <b className="bc-no">#{o.no.split('-').pop()}</b>
-        <span className="bc-due">{o.fulfillment === 'sekarang' ? 'DITUNGGU' : `${o.fulfillment === 'antar' ? 'Antar' : 'Ambil'} ${dayKey(o.due_at!) === dayKey(new Date()) ? 'Hari ini' : fmtDate(o.due_at)} ${fmtTime(o.due_at)}`}</span>
+        <span className="bc-due">{o.fulfillment === 'sekarang' ? 'READY' : `${o.fulfillment === 'antar' ? 'Antar' : 'Ambil'} ${dayKey(o.due_at!) === dayKey(new Date()) ? 'Hari ini' : fmtDate(o.due_at)} ${fmtTime(o.due_at)}`}</span>
       </div>
       <div onClick={onOpen}>
         {o.items.map((it, i) => <div key={i} className="bc-item"><b>{it.qty}×</b> {it.name}{it.note && <div className="muted">› {it.note}</div>}</div>)}

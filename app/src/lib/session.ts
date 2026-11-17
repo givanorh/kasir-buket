@@ -4,7 +4,7 @@ import { Capacitor } from '@capacitor/core';
 import { db, getMeta, resetLocalData, setMeta } from './db';
 import type { Role } from './types';
 import { proxyMessage } from './rules';
-import { FN_LABEL, KIND_LABEL, type DeviceFn, type DeviceKind } from './device';
+import { guessKind } from './device';
 
 export interface SessionUser { id: string; name: string; username: string; role: Role; outlet_id?: string }
 export interface SessionDevice { id: string; code: string; name?: string; outlet_id?: string }
@@ -69,8 +69,9 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
   try {
     res = await fetch(base + path, {
       method: opts.method || (opts.body ? 'POST' : 'GET'),
-      // header ngrok: lewati halaman peringatan tunnel gratis (tidak berpengaruh tanpa ngrok)
-      headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1', ...(session.token ? { Authorization: `Bearer ${session.token}` } : {}) },
+      // hanya bila alamat server adalah domain ngrok: lewati halaman peringatan tunnel gratis.
+      // Setelah server pindah ke VPS (alamat bukan ngrok) header ini otomatis tidak dikirim lagi.
+      headers: { 'Content-Type': 'application/json', ...(/ngrok/i.test(base) ? { 'ngrok-skip-browser-warning': '1' } : {}), ...(session.token ? { Authorization: `Bearer ${session.token}` } : {}) },
       body: opts.body ? JSON.stringify(opts.body) : undefined,
       signal: ctrl.signal,
     });
@@ -94,9 +95,11 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
  * Masuk ke server. Bila server ternyata basis data lain (instanceId berbeda dari yang terakhir dipakai),
  * data lokal dikosongkan agar tidak tercampur; perubahan yang belum terkirim butuh konfirmasi.
  */
-export async function login(username: string, password: string, dev: { kind: DeviceKind; fn: DeviceFn }, confirmDiscard?: (pending: number) => boolean) {
+export async function login(username: string, password: string, confirmDiscard?: (pending: number) => boolean) {
+  // Perangkat dikenali otomatis: ID perangkat tersimpan di sini, jenis dari layar sentuh + ukuran layar.
+  // Fungsi awal mengikuti peran akun (ditentukan server); nama dan kategori selanjutnya diatur owner.
   const r = await api<{ token: string; user: SessionUser; device: SessionDevice; instanceId?: string }>('/api/auth/login', {
-    body: { username, password, deviceId: session.deviceId, deviceKind: dev.kind, deviceFn: dev.fn, deviceName: `${KIND_LABEL[dev.kind]} ${FN_LABEL[dev.fn]}` },
+    body: { username, password, deviceId: session.deviceId, deviceKind: guessKind() },
   });
   if (r.instanceId && session.serverInstance && r.instanceId !== session.serverInstance) {
     const pending = await db.outbox.count();
@@ -110,11 +113,15 @@ export async function login(username: string, password: string, dev: { kind: Dev
   return r;
 }
 
-/** Ubah jenis/fungsi perangkat ini; server memberi kode baru (kode lama tetap dicadangkan). */
-export async function changeDeviceCode(kind: DeviceKind, fn: DeviceFn) {
-  const r = await api<{ device: SessionDevice }>('/api/devices/code', { body: { kind, fn } });
-  await updateSession({ device: r.device });
-  return r.device;
+/**
+ * Owner mengganti nama/kategori perangkat lain; perangkat itu menerima kodenya lewat rekaman `devices` saat sinkron.
+ * Mengembalikan true bila kode atau nama perangkat ini berubah.
+ */
+export async function applyDeviceRecord(rec: { id: string; code?: string; name?: string; outlet_id?: string } | undefined) {
+  if (!rec || rec.id !== session.deviceId || !rec.code || !session.device) return false;
+  if (rec.code === session.device.code && (rec.name || '') === (session.device.name || '')) return false;
+  await updateSession({ device: { ...session.device, id: rec.id, code: rec.code, name: rec.name } });
+  return true;
 }
 
 export async function logout() {

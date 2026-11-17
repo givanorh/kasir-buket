@@ -32,7 +32,7 @@ Server menegakkan izin: perangkai hanya boleh mengubah kolom produksi pada pesan
 3. Ubah per baris: jumlah, harga, potongan, catatan (warna, isi, ukuran).
 4. Pembayaran: Lunas, DP, atau Bayar nanti. Metode: Tunai, QRIS, Transfer, Debit, e-wallet (daftar bisa diubah owner).
 5. Tunai: tombol nominal cepat (uang pas, pembulatan 50 rb/100 rb) dan hitung kembalian.
-6. Pengambilan: Ditunggu, Ambil nanti (tanggal+jam), Diantar (penerima, alamat, ongkir).
+6. Pengambilan: Ready (dulu Ditunggu), Ambil nanti (tanggal+jam), Diantar (penerima, alamat, ongkir).
 7. Kartu ucapan dan catatan rangkaian untuk perangkai.
 8. Peringatan kapasitas: jumlah buket terjadwal pada tanggal itu dibandingkan kapasitas harian.
 
@@ -152,7 +152,7 @@ Server mengirim email berisi undangan iCalendar (RFC 5545, metode iTIP RFC 5546)
 | Pesanan batal, perangkai dilepas, email dihapus | CANCEL |
 | Status produksi, pembayaran, cetak | tidak ada email |
 
-Acara: mulai = jadwal − durasi rangkai (bawaan 60 menit), selesai = jadwal; pesanan "ditunggu" = 30 menit sejak dibuat. UID = `kb-<id pesanan>-<sha256(email)[0..10]>@kasir-buket`. Antrean `notify_jobs` dikirim tiap 5 detik; gagal dicoba ulang 8 kali (30 dtk, 2 mnt, 10 mnt, 30 mnt, lalu tiap jam). Pesanan yang jadwalnya lewat > 6 jam tidak diberi undangan baru.
+Acara: mulai = jadwal − durasi rangkai (bawaan 60 menit), selesai = jadwal; pesanan "ready" = 30 menit sejak dibuat. UID = `kb-<id pesanan>-<sha256(email)[0..10]>@kasir-buket`. Antrean `notify_jobs` dikirim tiap 5 detik; gagal dicoba ulang 8 kali (30 dtk, 2 mnt, 10 mnt, 30 mnt, lalu tiap jam). Pesanan yang jadwalnya lewat > 6 jam tidak diberi undangan baru.
 
 ### 3.5.2. Rute ongkir
 `POST /api/geo/route` → OpenRouteService `POST /v2/directions/driving-car` (koordinat `[lng, lat]`, radius penempelan 5 km, kunci di header `Authorization`) → cadangan OSRM `GET /route/v1/driving/…` → bila gagal, 502 dan kasir mengisi km manual.

@@ -42,7 +42,7 @@ export default function Riwayat() {
   return (
     <div className="page">
       <div className="toolbar">
-        <Seg value={filter} onChange={setFilter} options={[{ value: 'hari', label: 'Hari ini' }, { value: 'jadwal', label: 'Jadwal' }, { value: 'piutang', label: 'Belum lunas' }, { value: '30', label: '30 hari' }]} />
+        <Seg value={filter} onChange={setFilter} options={[{ value: 'hari', label: 'Hari ini' }, { value: '30', label: '30 hari' }, { value: 'jadwal', label: 'Deadline' }, { value: 'piutang', label: 'Belum lunas' }]} />
         <input className="grow" placeholder="Cari no / nama / HP" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
       <div className="table" style={{ ['--cols' as string]: '150px minmax(0,1fr) 170px 150px 110px 44px', ['--cols-sm' as string]: 'minmax(96px,auto) minmax(0,1fr) auto 40px' }}>
@@ -52,7 +52,7 @@ export default function Riwayat() {
             <div key={o.id} role="button" tabIndex={0} className={`trow click ${o.void ? 'void' : ''}`} onClick={() => setOpen(o.id)} onKeyDown={(e) => e.key === 'Enter' && setOpen(o.id)} data-testid="order-row">
               <div><b>{o.no}</b><div className="muted">{fmtShort(o.created_at)}</div></div>
               <div className="grow">{o.customer_name || 'Umum'}<div className="muted">{o.items.map((i) => `${i.qty}× ${i.name}`).join(', ')}</div></div>
-              <div className="hide-sm">{o.fulfillment === 'sekarang' ? <span className="muted">ditunggu</span> : <span>{o.fulfillment === 'antar' ? 'Antar' : 'Ambil'} {fmtShort(o.due_at)}</span>}</div>
+              <div className="hide-sm">{o.fulfillment === 'sekarang' ? <span className="muted">ready</span> : <span>{o.fulfillment === 'antar' ? 'Antar' : 'Ambil'} {fmtShort(o.due_at)}</span>}</div>
               <div className="right"><b>{rp(o.total)}</b><div>{o.void ? <Badge tone="red">Batal</Badge> : payBadge(paymentStatus(o.total, pd))}</div></div>
               <div className="hide-sm">{prodBadge(o.production_status)}</div>
               <button className="icon-btn" title="Cetak ulang struk" aria-label={`Cetak ulang struk ${o.no}`} data-testid="reprint"

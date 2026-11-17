@@ -451,7 +451,7 @@ function Checkout({ items, engage, onClose, onDone }: { items: OrderItem[]; enga
 
           <div className="section-title">Pengambilan</div>
           <Seg value={f.fulfillment} onChange={(fulfillment) => setF({ ...f, fulfillment })}
-            options={[{ value: 'sekarang', label: 'Ditunggu' }, { value: 'ambil', label: 'Ambil nanti' }, { value: 'antar', label: 'Diantar' }]} />
+            options={[{ value: 'sekarang', label: 'Ready' }, { value: 'ambil', label: 'Ambil nanti' }, { value: 'antar', label: 'Diantar' }]} />
           {f.fulfillment !== 'sekarang' && (
             <Field label="Tanggal dan jam" hint={cap ? <span className={scheduled + newQty > cap ? 'red' : ''}>Kapasitas {fmtDate(dueIso)}: {scheduled} + {newQty} dari {cap} buket</span> : undefined}>
               <input type="datetime-local" value={f.due} onChange={(e) => setF({ ...f, due: e.target.value })} data-testid="due" />
@@ -544,7 +544,7 @@ export function Success({ order, results, onClose }: { order: Order; results: Pr
       <div className="success">
         <div className="stack">
           <div className="big-no" data-testid="order-no">{order.no}</div>
-          <div className="muted">{rp(order.total)} · {order.fulfillment === 'sekarang' ? 'ditunggu' : `${order.fulfillment === 'antar' ? 'antar' : 'ambil'} ${fmtDate(order.due_at)}`}{order.florist ? ` · perangkai ${order.florist}` : ''}</div>
+          <div className="muted">{rp(order.total)} · {order.fulfillment === 'sekarang' ? 'ready' : `${order.fulfillment === 'antar' ? 'antar' : 'ambil'} ${fmtDate(order.due_at)}`}{order.florist ? ` · perangkai ${order.florist}` : ''}</div>
           {(['kasir', 'produksi'] as const).map((tg) => {
             const r = res.find((x) => x.target === tg);
             return (

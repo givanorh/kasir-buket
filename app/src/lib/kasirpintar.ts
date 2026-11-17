@@ -12,7 +12,23 @@ export interface KPExport {
   transactions?: any[];
 }
 
-const safeId = (prefix: string, raw: unknown) => `${prefix}${String(raw ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 50)}`;
+const clean = (raw: unknown) => String(raw ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 50);
+const safeId = (prefix: string, raw: unknown) => `${prefix}${clean(raw)}`;
+/** FNV-1a 32 bit → base36; cukup untuk ID cadangan yang stabil antarimpor. */
+export function hashKey(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(36).padStart(7, '0');
+}
+/**
+ * ID impor: kandidat pertama yang tidak kosong setelah dibersihkan. Bila semua kosong (baris tanpa ID dan tanpa kode),
+ * ID diturunkan dari isi baris (`fallback`, mis. nama + harga) sehingga tetap deterministik dan sah menurut server
+ * (/^[A-Za-z0-9_-]{4,64}$/). Sebelum v1.8 baris seperti itu menjadi "kp-" dan ditolak server ("ID tidak valid").
+ */
+export function importId(prefix: string, candidates: unknown[], fallback: string): string {
+  for (const c of candidates) { const v = clean(c); if (v) return `${prefix}${v}`; }
+  return `${prefix}h${hashKey(fallback.trim().toLowerCase())}`;
+}
 const n = (v: unknown) => Math.round(Number(v) || 0);
 
 /** Waktu Kasir Pintar umumnya "YYYY-MM-DD HH:mm:ss" waktu lokal (WIB) atau epoch. */
@@ -43,7 +59,7 @@ function parseItems(raw: unknown): any[] {
   return [];
 }
 
-export interface ImportPlan { categories: number; products: number; customers: number; orders: number; payments: number; writes: { c: Collection; id: string; patch: Record<string, unknown> }[] }
+export interface ImportPlan { categories: number; products: number; customers: number; orders: number; payments: number; /** baris tanpa ID, kode, dan nama */ skipped: number; writes: { c: Collection; id: string; patch: Record<string, unknown> }[] }
 
 export async function planImport(data: KPExport, outletId: string, opts: { importStock: boolean }): Promise<ImportPlan> {
   const writes: ImportPlan['writes'] = [];
@@ -52,7 +68,7 @@ export async function planImport(data: KPExport, outletId: string, opts: { impor
   const catId = (name: string) => {
     const key = (name || 'Lainnya').trim().toLowerCase();
     if (!catByName.has(key)) {
-      const id = safeId('kpcat-', key.replace(/\s+/g, '-')) || 'kpcat-lain';
+      const id = importId('kpcat-', [key.replace(/\s+/g, '-')], key);
       catByName.set(key, id);
       writes.push({ c: 'categories', id, patch: { name: (name || 'Lainnya').trim(), sort: 50 + catByName.size } });
     }
@@ -62,8 +78,12 @@ export async function planImport(data: KPExport, outletId: string, opts: { impor
   for (const c of data.categories || []) { const before = catByName.size; catId(c.nama || c.name); if (catByName.size > before) categories++; }
 
   const prodBySku = new Map<string, string>();
+  let skipped = 0;
   for (const p of data.products || []) {
-    const id = safeId('kp-', p.id_barang ?? p.id ?? p.kode_barang);
+    const pname = String(p.nama_barang || p.name || '').trim();
+    // baris tanpa ID, tanpa kode, dan tanpa nama bukan produk (mis. baris jumlah): dilewati
+    if (!pname && !clean(p.id_barang) && !clean(p.id) && !clean(p.kode_barang)) { skipped++; continue; }
+    const id = importId('kp-', [p.id_barang, p.id, p.kode_barang], `${pname}|${n(p.harga_jual)}|${String(p.kategori || '')}`);
     // harga_beli = HPP per unit. harga_modal di Kasir Pintar = nilai modal total (harga_beli × stok), bukan per unit.
     const stok = n(p.stok);
     const cost = n(p.harga_beli) || (n(p.harga_modal) && stok > 0 ? Math.round(n(p.harga_modal) / stok) : n(p.harga_modal));
@@ -81,7 +101,9 @@ export async function planImport(data: KPExport, outletId: string, opts: { impor
   }
 
   for (const c of data.customers || []) {
-    const id = safeId('kpcus-', c.id ?? c.kode ?? c.no_hp);
+    const cname = String(c.nama || c.name || '').trim();
+    if (!cname && !clean(c.id) && !clean(c.kode) && !clean(c.no_hp)) { skipped++; continue; }
+    const id = importId('kpcus-', [c.id, c.kode, c.no_hp], cname);
     writes.push({ c: 'customers', id, patch: { name: String(c.nama || c.name || c.no_hp || 'Pelanggan'), phone: String(c.no_hp || c.phone || '').replace(/[^\d+]/g, ''), address: String(c.alamat || ''), note: String(c.email || '') } });
     customers++;
   }
@@ -90,7 +112,7 @@ export async function planImport(data: KPExport, outletId: string, opts: { impor
     if (t.jenis && t.jenis !== 'pemasukan') continue;
     const kode = t.kode ?? t.no_struk;
     if (!kode) continue;
-    const id = safeId('kpo-', kode);
+    const id = importId('kpo-', [kode], `${t.timestamp}|${t.grand_total ?? t.total}`);
     const items: OrderItem[] = parseItems(t.data_transaksi).map((it) => ({
       product_id: prodBySku.get(String(it.kode_barang)) || undefined,
       name: String(it.nama_barang || 'Item'), sku: String(it.kode_barang || ''),
@@ -115,11 +137,14 @@ export async function planImport(data: KPExport, outletId: string, opts: { impor
     });
     orders++;
     if (paid > 0) {
-      writes.push({ c: 'payments', id: safeId('kpp-', kode), patch: { order_id: id, outlet_id: outletId, method: kpMethod(t.metode_pembayaran ?? t.tipe_pembayaran), amount: paid, kind: paid >= total ? 'lunas' : 'dp', created_at: created } });
+      writes.push({ c: 'payments', id: `kpp-${id.slice(4)}`, patch: { order_id: id, outlet_id: outletId, method: kpMethod(t.metode_pembayaran ?? t.tipe_pembayaran), amount: paid, kind: paid >= total ? 'lunas' : 'dp', created_at: created } });
       payments++;
     }
   }
-  return { categories, products, customers, orders, payments, writes };
+  // jaring pengaman: tidak boleh ada ID yang akan ditolak server
+  const bad = writes.find((w) => !/^[A-Za-z0-9_-]{4,64}$/.test(w.id));
+  if (bad) throw new Error(`ID impor tidak sah pada ${bad.c}: "${bad.id}"`);
+  return { categories, products, customers, orders, payments, skipped, writes };
 }
 
 export async function runImport(plan: ImportPlan, onProgress?: (done: number, total: number) => void) {

@@ -6,7 +6,8 @@
 // - GET/POST /api/notify, POST /api/notify/test         (notifikasi & kalender perangkai, khusus owner)
 // - GET/POST /api/calsync                               (kalender event toko ke Google Calendar owner, khusus owner)
 // - GET/POST /api/geo-config, POST /api/geo/route       (ongkir: OpenRouteService, cadangan OSRM)
-// - POST /api/devices/code                             (ubah jenis/fungsi perangkat -> kode nomor struk)
+// - GET /api/devices, PATCH /api/devices/:id            (owner: daftar perangkat + riwayat login, ganti nama & kategori)
+// - POST /api/devices/code                             (versi lama: owner mengubah jenis/fungsi perangkatnya sendiri)
 // - selain /api: menyajikan aplikasi web (folder app/dist)
 import http from 'node:http';
 import fs from 'node:fs';
@@ -21,13 +22,30 @@ import { createNotifier } from './notify.js';
 import { createEventSync, KINDS as EV_KINDS } from './evsync.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const VERSION = '1.7.0';
+export const VERSION = '1.8.0';
 
 const ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
 const ROLES = ['owner', 'kasir', 'perangkai'];
 // Kode perangkat = jenis + fungsi, mis. KK = Komputer Kasir. Bila sudah dipakai perangkat lain: KK2, KK3, ...
 export const DEVICE_KIND = { K: 'Komputer', H: 'HP', T: 'Tablet' };
 export const DEVICE_FN = { K: 'Kasir', R: 'Ruang Rangkai', O: 'Owner' };
+/** Fungsi awal perangkat baru mengikuti peran akun yang pertama masuk; owner bisa mengubahnya di Pengaturan > Perangkat. */
+const ROLE_FN = { kasir: 'K', perangkai: 'R', owner: 'O' };
+
+/** Ringkasan User-Agent untuk daftar perangkat, mis. "Chrome · Windows" atau "Aplikasi Android · SM-A546E". */
+export function uaInfo(ua) {
+  const s = String(ua || '').slice(0, 400);
+  if (!s) return '';
+  const android = s.match(/Android [\d.]+;\s*([^;)]+?)(?:\s+Build\/[^;)]*)?[;)]/);
+  const model = android && !/^(K|wv|Mobile|Tablet|Linux)$/i.test(android[1].trim()) ? android[1].trim() : '';
+  const os = /Android/.test(s) ? 'Android' : /iPad/.test(s) ? 'iPad' : /iPhone/.test(s) ? 'iPhone' : /Windows/.test(s) ? 'Windows' : /Mac OS X|Macintosh/.test(s) ? 'Mac' : /CrOS/.test(s) ? 'ChromeOS' : /Linux/.test(s) ? 'Linux' : '';
+  const br = /; wv\)/.test(s) ? 'Aplikasi Android' : /Edg(?:e|A|iOS)?\//.test(s) ? 'Edge' : /OPR\/|Opera/.test(s) ? 'Opera' : /SamsungBrowser\//.test(s) ? 'Samsung Internet' : /Firefox\/|FxiOS/.test(s) ? 'Firefox'
+    : /Chrome\/|CriOS/.test(s) ? 'Chrome' : /Safari\//.test(s) ? 'Safari' : '';
+  const sys = [os && !(br === 'Aplikasi Android' && os === 'Android') ? os : '', model].filter(Boolean).join(' ');
+  return [br, sys].filter(Boolean).join(' · ').replace(/[^\x20-\x7E·]/g, '').slice(0, 80);
+}
+/** Jenis perangkat dari User-Agent bila klien tidak mengirim hasil deteksinya. */
+const uaKind = (ua) => (/iPad|Tablet|Android(?!.*Mobile)/.test(String(ua || '')) ? 'T' : /Mobi|Android|iPhone/.test(String(ua || '')) ? 'H' : 'K');
 
 // Aturan tulis per koleksi. `fields` membatasi kolom yang boleh diubah peran tertentu.
 // `read` (opsional) membatasi peran yang boleh menarik koleksi itu saat sinkron (mis. gaji hanya untuk owner).
@@ -88,8 +106,14 @@ export function createServer(opts = {}) {
     codeOnDevice: db.prepare('SELECT id FROM devices WHERE code = ?'),
     reserveCode: db.prepare('INSERT OR IGNORE INTO device_codes (code, device_id, created_at) VALUES (?, ?, ?)'),
     setDeviceCode: db.prepare('UPDATE devices SET code = ?, name = ? WHERE id = ?'),
-    insertDevice: db.prepare('INSERT INTO devices (id, code, name, user_id, outlet_id, created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)'),
-    touchDevice: db.prepare('UPDATE devices SET last_seen = ?, user_id = ?, name = COALESCE(?, name) WHERE id = ?'),
+    insertDevice: db.prepare('INSERT INTO devices (id, code, name, user_id, outlet_id, created_at, last_seen, ua, logins) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)'),
+    touchDevice: db.prepare('UPDATE devices SET last_seen = ?, user_id = ?, ua = COALESCE(?, ua), logins = logins + 1 WHERE id = ?'),
+    listDevices: db.prepare(`SELECT d.id, d.code, d.name, d.user_id, d.outlet_id, d.created_at, d.last_seen, d.ua, d.logins, u.name AS user_name, u.role AS user_role
+      FROM devices d LEFT JOIN users u ON u.id = d.user_id ORDER BY d.last_seen DESC`),
+    addLogin: db.prepare('INSERT INTO logins (device_id, user_id, at, ua) VALUES (?, ?, ?, ?)'),
+    trimLogins: db.prepare('DELETE FROM logins WHERE id <= (SELECT MAX(id) FROM logins) - 500'),
+    recentLogins: db.prepare(`SELECT l.at, l.ua, l.device_id, d.code, d.name AS device_name, u.name AS user_name, u.role AS user_role
+      FROM logins l LEFT JOIN devices d ON d.id = l.device_id LEFT JOIN users u ON u.id = l.user_id ORDER BY l.id DESC LIMIT ?`),
     paidSum: db.prepare(`SELECT COALESCE(SUM(json_extract(data, '$.amount')), 0) AS s FROM records WHERE c = 'payments' AND del = 0
       AND json_extract(data, '$.order_id') = ? AND COALESCE(json_extract(data, '$.void'), 0) = 0`),
     owners: db.prepare("SELECT name, email FROM users WHERE role = 'owner' AND active = 1 AND email IS NOT NULL AND email != ''"),
@@ -117,15 +141,23 @@ export function createServer(opts = {}) {
     writeRecord('staff', u.id, { name: u.name, username: u.username, role: u.role, active: !!u.active, outlet_id: u.outlet_id || null }, null);
   }
 
-  /** Jenis & fungsi dari pilihan layar masuk; perangkat versi lama ditebak dari namanya. */
-  function deviceBase(body) {
+  /**
+   * Kategori awal perangkat BARU, tanpa pilihan di layar masuk (v1.8).
+   * Jenis: hasil deteksi klien (`deviceKind`, dari layar sentuh + ukuran layar), lalu nama (klien lama), lalu User-Agent.
+   * Fungsi: `deviceFn`/nama dari klien versi lama, selain itu mengikuti peran akun (kasir = K, perangkai = R, owner = O).
+   * Setelah terdaftar, kategori hanya berubah lewat owner (PATCH /api/devices/:id).
+   */
+  function deviceBase(body, role, ua) {
     let kind = String(body.deviceKind || '').toUpperCase();
     let fn = String(body.deviceFn || '').toUpperCase();
     const name = String(body.deviceName || '');
-    if (!DEVICE_KIND[kind]) kind = /tablet|tab\b/i.test(name) ? 'T' : /\bhp\b|handphone|android|ponsel/i.test(name) ? 'H' : 'K';
-    if (!DEVICE_FN[fn]) fn = /rangkai|produksi|florist/i.test(name) ? 'R' : /owner|pemilik/i.test(name) ? 'O' : 'K';
+    if (!DEVICE_KIND[kind]) kind = /tablet|tab\b/i.test(name) ? 'T' : /\bhp\b|handphone|android|ponsel/i.test(name) ? 'H' : /komputer|\bpc\b|laptop/i.test(name) ? 'K' : uaKind(ua);
+    if (!DEVICE_FN[fn]) fn = /rangkai|produksi|florist/i.test(name) ? 'R' : /owner|pemilik/i.test(name) ? 'O' : /kasir/i.test(name) ? 'K' : ROLE_FN[role] || 'K';
     return { base: kind + fn, label: `${DEVICE_KIND[kind]} ${DEVICE_FN[fn]}` };
   }
+  /** Nama bawaan = "<Jenis> <Fungsi>" dari kode; nama lain berarti sudah diganti owner dan tidak boleh ditimpa. */
+  const autoLabel = (code) => { const m = String(code || '').match(/^([KHT])([KRO])\d*$/); return m ? `${DEVICE_KIND[m[1]]} ${DEVICE_FN[m[2]]}` : null; };
+  const deviceRecord = (d) => ({ code: d.code, name: d.name, user_id: d.user_id, outlet_id: d.outlet_id, last_seen: d.last_seen, ua: d.ua || '' });
   /** Kode bebas pertama: KK, KK2, KK3, ... Kode yang pernah dipakai perangkat lain tidak diberikan lagi. */
   function allocCode(base, deviceId) {
     for (let i = 1; i < 1000; i++) {
@@ -137,17 +169,22 @@ export function createServer(opts = {}) {
     throw new HttpError(409, 'Kode perangkat habis');
   }
   const sameBase = (code, base) => new RegExp(`^${base}\\d*$`).test(code || '');
-  /** Pasang kode baru (bila jenis/fungsi berubah) dan cerminkan ke koleksi `devices`. Panggil di dalam transaksi. */
-  function applyDeviceCode(dev, base, label, userId) {
+  /**
+   * Pasang kode baru (bila jenis/fungsi berubah) dan/atau nama, lalu cerminkan ke koleksi `devices`. Panggil di dalam transaksi.
+   * `name` kosong = pakai nama bawaan; nama yang sudah diganti owner dipertahankan saat kategori berubah.
+   */
+  function applyDeviceCode(dev, base, label, userId, name) {
+    const custom = dev.name && dev.name !== autoLabel(dev.code) && autoLabel(dev.code) !== null ? dev.name : null;
+    const finalName = name !== undefined ? (String(name).trim() || label) : (custom || label);
     if (!sameBase(dev.code, base)) {
       const code = allocCode(base, dev.id);
-      q.setDeviceCode.run(code, label, dev.id);
+      q.setDeviceCode.run(code, finalName, dev.id);
       q.reserveCode.run(code, dev.id, now());
-    } else if (dev.name !== label) {
-      q.setDeviceCode.run(dev.code, label, dev.id);
+    } else if (dev.name !== finalName) {
+      q.setDeviceCode.run(dev.code, finalName, dev.id);
     }
     const d = q.deviceById.get(dev.id);
-    writeRecord('devices', d.id, { code: d.code, name: d.name, user_id: userId, outlet_id: d.outlet_id, last_seen: d.last_seen }, userId);
+    writeRecord('devices', d.id, deviceRecord(d), userId);
     return d;
   }
 
@@ -345,13 +382,31 @@ export function createServer(opts = {}) {
     throw new HttpError(405, 'Metode tidak didukung');
   }
 
-  function handleDeviceCode(user, body) {
-    const dev = q.deviceById.get(user.deviceId);
-    if (!dev) throw new HttpError(404, 'Perangkat tidak dikenal, silakan masuk ulang');
-    const kind = String(body.kind || '').toUpperCase(), fn = String(body.fn || '').toUpperCase();
-    if (!DEVICE_KIND[kind] || !DEVICE_FN[fn]) throw new HttpError(400, 'Jenis atau fungsi perangkat tidak dikenal');
+  /** Owner mengelola perangkat: daftar + riwayat login, ganti nama, ganti kategori (jenis/fungsi → kode nomor struk baru). */
+  function handleDevices(user, method, parts, body) {
+    if (user.role !== 'owner') throw new HttpError(403, 'Kategori dan nama perangkat diatur owner di Pengaturan › Perangkat');
+    if (method === 'GET') {
+      return {
+        devices: q.listDevices.all().map((d) => ({ ...d, current: d.id === user.deviceId })),
+        logins: q.recentLogins.all(Math.min(200, Math.max(1, Number(body?.limit) || 50))),
+      };
+    }
+    // POST /api/devices/code (klien lama) = perangkat sendiri; PATCH /api/devices/:id = perangkat mana pun
+    const id = method === 'POST' && parts[2] === 'code' ? user.deviceId : parts[2];
+    if (!(method === 'PATCH' || (method === 'POST' && parts[2] === 'code'))) throw new HttpError(405, 'Metode tidak didukung');
+    const dev = q.deviceById.get(id);
+    if (!dev) throw new HttpError(404, 'Perangkat tidak dikenal');
+    const cur = String(dev.code || '').match(/^([KHT])([KRO])\d*$/);
+    const kind = String(body.kind || cur?.[1] || '').toUpperCase(), fn = String(body.fn || cur?.[2] || '').toUpperCase();
+    const name = body.name === undefined ? undefined : String(body.name).replace(/[\x00-\x1f<>]/g, '').trim().slice(0, 40);
     let d;
-    store.tx(() => { d = applyDeviceCode(dev, kind + fn, `${DEVICE_KIND[kind]} ${DEVICE_FN[fn]}`, user.id); });
+    if (!DEVICE_KIND[kind] || !DEVICE_FN[fn]) {
+      // kode versi lama (mis. "B") tanpa kategori: hanya ganti nama yang diperbolehkan sampai owner memilih jenis & fungsi
+      if (body.kind || body.fn || name === undefined) throw new HttpError(400, 'Jenis atau fungsi perangkat tidak dikenal');
+      store.tx(() => { q.setDeviceCode.run(dev.code, name || dev.name || dev.code, dev.id); d = q.deviceById.get(dev.id); writeRecord('devices', d.id, deviceRecord(d), user.id); });
+    } else {
+      store.tx(() => { d = applyDeviceCode(dev, kind + fn, `${DEVICE_KIND[kind]} ${DEVICE_FN[fn]}`, user.id, name); });
+    }
     broadcast();
     return { device: { id: d.id, code: d.code, name: d.name, outlet_id: d.outlet_id } };
   }
@@ -496,20 +551,22 @@ export function createServer(opts = {}) {
     limiter.reset(key);
     let deviceId = ID_RE.test(body.deviceId || '') ? body.deviceId : newId();
     let dev = q.deviceById.get(deviceId);
-    const { base, label } = deviceBase(body);
-    const explicit = !!(body.deviceKind && body.deviceFn);
+    const ua = uaInfo(req.headers['user-agent']);
     store.tx(() => {
+      const ts = now();
       if (!dev) {
+        // perangkat baru dikenali otomatis; kategori & nama selanjutnya hanya diubah owner
+        const { base, label } = deviceBase(body, u.role, req.headers['user-agent']);
         const code = allocCode(base, deviceId);
-        q.insertDevice.run(deviceId, code, label, u.id, u.outlet_id, now(), now());
-        q.reserveCode.run(code, deviceId, now());
+        q.insertDevice.run(deviceId, code, label, u.id, u.outlet_id, ts, ts, ua);
+        q.reserveCode.run(code, deviceId, ts);
       } else {
-        q.touchDevice.run(now(), u.id, null, deviceId);
+        q.touchDevice.run(ts, u.id, ua || null, deviceId);
       }
+      q.addLogin.run(deviceId, u.id, ts, ua);
+      q.trimLogins.run();
       dev = q.deviceById.get(deviceId);
-      // jenis/fungsi dipilih di layar masuk: kode ikut berubah bila berbeda (kode lama tetap dicadangkan)
-      dev = explicit ? applyDeviceCode(dev, base, label, u.id) : dev;
-      if (!explicit) writeRecord('devices', dev.id, { code: dev.code, name: dev.name, user_id: u.id, outlet_id: dev.outlet_id, last_seen: dev.last_seen }, u.id);
+      writeRecord('devices', dev.id, deviceRecord(dev), u.id);
     });
     broadcast();
     const token = signToken(store.secret, { u: u.id, d: deviceId, r: u.role }, tokenDays);
@@ -747,7 +804,7 @@ export function createServer(opts = {}) {
       }
       if (parts[1] === 'notify') return send(res, 200, await handleNotify(user, req.method, parts, req.method === 'GET' ? {} : await readJson(req)));
       if (parts[1] === 'calsync') return send(res, 200, handleCalsync(user, req.method, parts, req.method === 'GET' ? {} : await readJson(req)));
-      if (route === 'POST /api/devices/code') return send(res, 200, handleDeviceCode(user, await readJson(req)));
+      if (parts[1] === 'devices') return send(res, 200, handleDevices(user, req.method, parts, req.method === 'GET' ? { limit: url.searchParams.get('limit') } : await readJson(req)));
       if (parts[1] === 'email-config') return send(res, 200, await handleEmailConfig(user, req.method, parts, req.method === 'GET' ? {} : await readJson(req)));
       if (parts[1] === 'users') return send(res, 200, handleUsers(user, req.method, parts, req.method === 'GET' ? {} : await readJson(req)));
       throw new HttpError(404, 'Endpoint tidak ditemukan');
@@ -758,7 +815,12 @@ export function createServer(opts = {}) {
     }
   });
 
-  const heartbeat = setInterval(() => { for (const r of sseClients) r.write(': ping\n\n'); }, 25000);
+  // Denyut SSE tiap 25 detik membawa nomor urut terakhir: klien tahu salurannya hidup (cukup polling 5 menit sekali)
+  // dan langsung menarik data bila ada perubahan yang terlewat. Klien lama mengabaikan seq yang tidak lebih besar dari kursornya.
+  const heartbeat = setInterval(() => {
+    const msg = `event: seq\ndata: ${JSON.stringify({ seq: store.state.seq, beat: true })}\n\n`;
+    for (const r of sseClients) r.write(msg);
+  }, Number(process.env.SSE_BEAT_MS || 25000));
   const notifyTimer = opts.noNotifyTimer ? null : setInterval(() => {
     try { evsync.remind(); } catch (e) { console.error('Pengingat kalender:', e.message); }
     notifier.tick().catch((e) => console.error('Notifikasi:', e.message));

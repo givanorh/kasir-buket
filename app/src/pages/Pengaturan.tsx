@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, getMeta } from '../lib/db';
-import { api, changeDeviceCode, isNative, logout, useSession } from '../lib/session';
+import { db } from '../lib/db';
+import { api, isNative, logout, useSession } from '../lib/session';
 import { sync, useSyncStatus } from '../lib/sync';
 import { getDeviceConfig, newId, save, setDeviceConfig, type DeviceConfig, type PrinterConfig, type PrinterMode } from '../lib/store';
 import { sendToPrinter, ThermalPrinter } from '../lib/print';
@@ -13,7 +13,7 @@ import { DEFAULT_SURVEY, answerOf, storeCfg } from '../lib/settings';
 import { REVIEW_ACCEPT_RATE, budgetLeft, budgetSuggestion, monthKey, monthStartIso, reviewTiers, reviewUsage, tierAmount } from '../lib/review';
 import { parseLocalInput } from '../lib/geo';
 import { num, rp } from '../lib/format';
-import { FN_OPTIONS, KIND_OPTIONS, codeMeaning, guessKind, sampleNo, splitCode, type DeviceFn, type DeviceKind } from '../lib/device';
+import { FN_OPTIONS, KIND_OPTIONS, codeMeaning, sampleNo, splitCode, type DeviceFn, type DeviceKind } from '../lib/device';
 import { ROLE_LABEL } from '../lib/labels';
 import type { EngageCfg, Outlet, PrintTarget, ReviewTier, Role, Settings, SurveyQuestion } from '../lib/types';
 import { fmtShort } from '../lib/format';
@@ -59,61 +59,126 @@ function DeviceTab() {
   const s = useSession();
   const st = useSyncStatus();
   const outlets = useLiveQuery(() => db.outlets.toArray(), []) || [];
-  const errors = useLiveQuery(() => getMeta<any[]>('sync_errors', []), []) || [];
   const [cfg, setCfg] = useDeviceConfig();
   const code = s.device?.code || '';
-  const cur = splitCode(code);
-  const [kind, setKind] = useState<DeviceKind>(cur?.kind || guessKind());
-  const [fn, setFn] = useState<DeviceFn>(cur?.fn || (s.user?.role === 'perangkai' ? 'R' : 'K'));
-  const [busy, setBusy] = useState(false);
-  const changed = !cur || cur.kind !== kind || cur.fn !== fn;
-  async function applyCode() {
-    setBusy(true);
-    try { const d = await changeDeviceCode(kind, fn); toast(`Kode perangkat sekarang ${d.code}. Nomor struk berikutnya ${sampleNo(d.code)}`); }
-    catch (e) { toast((e as Error).message, 'err'); } finally { setBusy(false); }
-  }
+  const owner = s.user?.role === 'owner';
   if (!cfg) return null;
   return (
-    <div className="two">
-      <section className="card">
-        <h3>Perangkat ini</h3>
-        <div className="devcode">
-          <span className="code" data-testid="device-code">{code || '?'}</span>
-          <div><b>{codeMeaning(code)}</b><div className="muted">Awalan nomor struk: {code ? `${sampleNo(code)}, ${sampleNo(code).replace(/001$/, '002')}, …` : '-'}</div></div>
-        </div>
-        <Field group label="Jenis"><Seg value={kind} onChange={setKind} options={KIND_OPTIONS} /></Field>
-        <Field group label="Dipakai untuk"><Seg value={fn} onChange={setFn} options={FN_OPTIONS} /></Field>
-        {changed && <button className="btn" disabled={busy} onClick={applyCode} data-testid="pakai-kode">Pakai kode {kind}{fn}</button>}
-        <p className="muted small">Huruf pertama: K = Komputer, H = HP, T = Tablet. Huruf kedua: K = Kasir, R = Ruang rangkai, O = Owner. Angka di belakang (KK2, KK3) membedakan perangkat sejenis. Nomor struk yang sudah terbit tidak berubah.</p>
-        <dl className="dl">
-          <dt>Nama</dt><dd>{s.device?.name}</dd>
-          <dt>Pengguna</dt><dd>{s.user?.name} · {s.user ? ROLE_LABEL[s.user.role] : ''}</dd>
-          <dt>Server</dt><dd className="break">{s.serverUrl}</dd>
-        </dl>
-        <Field label="Cabang perangkat ini">
-          <select value={cfg.outletId} onChange={(e) => setCfg({ ...cfg, outletId: e.target.value })}>
-            {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-          </select>
-        </Field>
-        <button className="btn danger" onClick={async () => { if (confirm('Keluar dari akun di perangkat ini? Data yang belum tersinkron tetap tersimpan.')) { sync.stop(); await logout(); } }}>Keluar</button>
-      </section>
-      <section className="card">
-        <h3>Sinkronisasi otomatis</h3>
-        <dl className="dl">
-          <dt>Status</dt><dd>{st.online ? (st.pending ? `${st.pending} perubahan menunggu` : 'Tersinkron') : 'Offline'}</dd>
-          <dt>Terakhir</dt><dd>{st.lastSync ? new Date(st.lastSync).toLocaleTimeString('id-ID') : '-'}</dd>
-          <dt>Nomor urut data</dt><dd>{num(st.cursor)}</dd>
-        </dl>
-        <p className="muted small">Sinkron berjalan sendiri: saat aplikasi dibuka, setiap ada transaksi, saat perangkat lain mengubah data (realtime), dan saat internet kembali. Tidak perlu menekan tombol.</p>
-        <button className="btn" onClick={() => sync.resync()}>Tarik ulang semua data</button>
-        {errors.length > 0 && (
-          <>
-            <h3>Perubahan ditolak server</h3>
-            {errors.slice(0, 10).map((e, i) => <div key={i} className="row small"><span>{fmtShort(e.at)} · {e.c}/{e.id}</span><span className="red">{e.error}</span></div>)}
-          </>
-        )}
-      </section>
+    <div className="stack">
+      <div className="two">
+        <section className="card">
+          <h3>Perangkat ini</h3>
+          <div className="devcode">
+            <span className="code" data-testid="device-code">{code || '?'}</span>
+            <div><b data-testid="device-name">{s.device?.name || codeMeaning(code)}</b><div className="muted">{codeMeaning(code)} · awalan nomor struk: {code ? `${sampleNo(code)}, ${sampleNo(code).replace(/001$/, '002')}, …` : '-'}</div></div>
+          </div>
+          <p className="muted small">Perangkat dikenali otomatis saat masuk (jenis dari layar perangkat, fungsi awal dari peran akun). Nama dan kategori {owner ? 'bisa Anda ubah di daftar Perangkat terdaftar di bawah.' : 'diatur owner di Pengaturan › Perangkat.'}</p>
+          <dl className="dl">
+            <dt>Pengguna</dt><dd>{s.user?.name} · {s.user ? ROLE_LABEL[s.user.role] : ''}</dd>
+            <dt>Server</dt><dd className="break">{s.serverUrl}</dd>
+          </dl>
+          <Field label="Cabang perangkat ini">
+            <select value={cfg.outletId} onChange={(e) => setCfg({ ...cfg, outletId: e.target.value })}>
+              {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </select>
+          </Field>
+          <button className="btn danger" onClick={async () => { if (confirm('Keluar dari akun di perangkat ini? Data yang belum tersinkron tetap tersimpan.')) { sync.stop(); await logout(); } }}>Keluar</button>
+        </section>
+        <section className="card">
+          <h3>Sinkronisasi otomatis</h3>
+          <dl className="dl">
+            <dt>Status</dt><dd>{st.online ? (st.pending ? `${st.pending} perubahan menunggu` : 'Tersinkron') : 'Offline'}</dd>
+            <dt>Terakhir</dt><dd>{st.lastSync ? new Date(st.lastSync).toLocaleTimeString('id-ID') : '-'}</dd>
+            <dt>Nomor urut data</dt><dd>{num(st.cursor)}</dd>
+          </dl>
+          <p className="muted small">Sinkron berjalan sendiri: saat aplikasi dibuka, setiap ada transaksi, saat perangkat lain mengubah data (realtime), dan saat internet kembali. Tidak perlu menekan tombol.</p>
+          <button className="btn" onClick={() => sync.resync()}>Tarik ulang semua data</button>
+        </section>
+      </div>
+      {owner && <DeviceAdmin />}
     </div>
+  );
+}
+
+interface DeviceRow { id: string; code: string; name?: string | null; ua?: string | null; logins: number; created_at: string; last_seen?: string | null; user_name?: string | null; user_role?: Role | null; current: boolean }
+interface LoginRow { at: string; ua?: string | null; device_id: string; code?: string | null; device_name?: string | null; user_name?: string | null; user_role?: Role | null }
+type DevDraft = { name: string; kind: DeviceKind | ''; fn: DeviceFn | '' };
+
+/** Owner: semua perangkat yang pernah masuk (riwayat login). Ganti nama dan kategori di sini, bukan di layar masuk. */
+function DeviceAdmin() {
+  const [rows, setRows] = useState<DeviceRow[]>([]);
+  const [logins, setLogins] = useState<LoginRow[]>([]);
+  const [draft, setDraft] = useState<Record<string, DevDraft>>({});
+  const [busy, setBusy] = useState('');
+  const [showLog, setShowLog] = useState(false);
+  // rekaman `devices` ikut sinkron: daftar dimuat ulang begitu ada perangkat baru masuk atau berubah
+  const stamp = useLiveQuery(async () => (await db.devices.toArray()).map((d) => `${d.id}:${d.code}:${d.name}:${d.last_seen}`).sort().join('|'), []);
+  const load = () => api<{ devices: DeviceRow[]; logins: LoginRow[] }>('/api/devices?limit=30')
+    .then((r) => { setRows(r.devices); setLogins(r.logins); }).catch((e) => toast(e.message, 'err'));
+  useEffect(() => { load(); }, [stamp]); // eslint-disable-line
+  const base = (d: DeviceRow): DevDraft => { const c = splitCode(d.code); return { name: d.name || '', kind: c?.kind || '', fn: c?.fn || '' }; };
+  const cur = (d: DeviceRow) => draft[d.id] || base(d);
+  const edit = (d: DeviceRow, p: Partial<DevDraft>) => setDraft({ ...draft, [d.id]: { ...cur(d), ...p } });
+  const dirty = (d: DeviceRow) => { const a = cur(d), b = base(d); return a.name.trim() !== b.name || a.kind !== b.kind || a.fn !== b.fn; };
+  async function saveRow(d: DeviceRow) {
+    const v = cur(d), b = base(d);
+    if ((v.kind || v.fn) && !(v.kind && v.fn)) { toast('Pilih jenis dan fungsi perangkat', 'err'); return; }
+    setBusy(d.id);
+    try {
+      const body: Record<string, string> = {};
+      if (v.name.trim() !== b.name) body.name = v.name.trim();
+      if (v.kind && v.fn && (v.kind !== b.kind || v.fn !== b.fn)) { body.kind = v.kind; body.fn = v.fn; }
+      const r = await api<{ device: { code: string; name: string } }>(`/api/devices/${d.id}`, { method: 'PATCH', body });
+      toast(r.device.code !== d.code ? `${r.device.name}: kode sekarang ${r.device.code}, nomor struk berikutnya ${sampleNo(r.device.code)}` : `Nama perangkat disimpan: ${r.device.name}`);
+      const { [d.id]: _, ...rest } = draft; setDraft(rest);
+      await load();
+      sync.run();
+    } catch (e) { toast((e as Error).message, 'err'); } finally { setBusy(''); }
+  }
+  const who = (n?: string | null, r?: Role | null) => (n ? `${n}${r ? ` (${ROLE_LABEL[r]})` : ''}` : 'pengguna dihapus');
+  return (
+    <section className="card" data-testid="device-admin">
+      <h3>Perangkat terdaftar</h3>
+      <p className="muted small">Setiap perangkat yang pernah masuk tercatat otomatis di sini. Beri nama agar mudah dikenali (mis. “Tablet depan”, “HP Nazra”). Kategori menentukan kode awalan nomor struk: huruf pertama K = Komputer, H = HP, T = Tablet; huruf kedua K = Kasir, R = Ruang rangkai, O = Owner. Bila kategori diubah, perangkat itu langsung memakai kode baru; nomor struk yang sudah terbit tidak berubah.</p>
+      <div className="devlist">
+        {rows.map((d) => {
+          const v = cur(d);
+          return (
+            <div key={d.id} className="devrow" data-testid="device-row">
+              <span className="code">{d.code}</span>
+              <div className="devmain">
+                <div className="devedit">
+                  <input value={v.name} onChange={(e) => edit(d, { name: e.target.value })} maxLength={40} placeholder={codeMeaning(d.code)} aria-label={`Nama perangkat ${d.code}`} />
+                  <select value={v.kind} onChange={(e) => edit(d, { kind: e.target.value as DeviceKind })} aria-label={`Jenis perangkat ${d.code}`}>
+                    {!v.kind && <option value="">Jenis…</option>}
+                    {KIND_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                  <select value={v.fn} onChange={(e) => edit(d, { fn: e.target.value as DeviceFn })} aria-label={`Fungsi perangkat ${d.code}`}>
+                    {!v.fn && <option value="">Fungsi…</option>}
+                    {FN_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                  <button className="btn small primary" disabled={!dirty(d) || busy === d.id} onClick={() => saveRow(d)} data-testid="device-save">Simpan</button>
+                </div>
+                <div className="muted small">
+                  {d.current && <Badge tone="green">perangkat ini</Badge>} {d.ua || 'perangkat belum masuk lagi sejak v1.8'} · terakhir masuk {who(d.user_name, d.user_role)} {fmtShort(d.last_seen || d.created_at)}
+                  {d.logins > 0 ? ` · ${d.logins}× login` : ''} · terdaftar {fmtShort(d.created_at)}{!splitCode(d.code) ? ' · kode versi lama, pilih jenis dan fungsi untuk memberi kode baru' : ''}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {!rows.length && <Empty>Belum ada perangkat.</Empty>}
+      </div>
+      <button className="linkish small" style={{ alignSelf: 'flex-start' }} onClick={() => setShowLog(!showLog)} data-testid="login-log-toggle">{showLog ? 'Sembunyikan riwayat login' : `Lihat riwayat login (${logins.length} terakhir)`}</button>
+      {showLog && (
+        <div className="loginlog" data-testid="login-log">
+          {logins.map((l, i) => (
+            <div key={i} className="row small"><span>{fmtShort(l.at)} · {who(l.user_name, l.user_role)}</span><span className="muted">{l.code || '?'} {l.device_name || ''}{l.ua ? ` · ${l.ua}` : ''}</span></div>
+          ))}
+          {!logins.length && <p className="muted small">Riwayat login dicatat sejak versi 1.8.</p>}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -493,6 +558,7 @@ function ImportTab() {
           <div className="row"><span>Pelanggan</span><b>{plan.customers}</b></div>
           <div className="row"><span>Transaksi</span><b>{plan.orders}</b></div>
           <div className="row"><span>Pembayaran</span><b>{plan.payments}</b></div>
+          {plan.skipped > 0 && <div className="row"><span>Baris kosong dilewati (tanpa ID, kode, dan nama)</span><b>{plan.skipped}</b></div>}
           <button className="btn primary" disabled={!!prog && prog[0] < prog[1]} onClick={async () => { await runImport(plan, (a, b) => setProg([a, b])); toast('Impor selesai, sedang dikirim ke server'); }}>Impor sekarang</button>
           {prog && <div className="progress"><i style={{ width: `${(prog[0] / prog[1]) * 100}%` }} /><span>{prog[0]} / {prog[1]}</span></div>}
           <p className="muted small">Impor ulang aman: data dengan ID yang sama akan diperbarui, bukan digandakan.</p>

@@ -86,7 +86,7 @@ export function buildStruk(order: Order, payments: Payment[], st: Settings | und
   return L;
 }
 
-const FULFILL_LABEL = { sekarang: 'DITUNGGU', ambil: 'DIAMBIL', antar: 'DIANTAR' } as const;
+const FULFILL_LABEL = { sekarang: 'READY', ambil: 'DIAMBIL', antar: 'DIANTAR' } as const;
 
 export function buildTiket(order: Order, st: Settings | undefined): Line[] {
   const L: Line[] = [];
@@ -96,7 +96,7 @@ export function buildTiket(order: Order, st: Settings | undefined): Line[] {
   L.push({ t: 'text', text: `#${shortNo}`, align: 'center', bold: true, size: 2 });
   L.push({ t: 'text', text: `${order.no} / ${stamp(order.created_at)}`, align: 'center' });
   L.push({ t: 'hr', char: '=' });
-  if (order.fulfillment === 'sekarang') L.push({ t: 'text', text: 'DITUNGGU', align: 'center', bold: true, size: 2 });
+  if (order.fulfillment === 'sekarang') L.push({ t: 'text', text: 'READY', align: 'center', bold: true, size: 2 });
   else {
     L.push({ t: 'text', text: FULFILL_LABEL[order.fulfillment], align: 'center', bold: true });
     L.push({ t: 'text', text: `${fmtDate(order.due_at)}`, align: 'center', bold: true });

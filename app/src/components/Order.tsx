@@ -140,7 +140,7 @@ export function OrderDetail({ order, onClose }: { order: Order; onClose: () => v
         <div className="stack">
           <div className="kv"><span>Dibuat</span><b>{fmtDateTime(order.created_at)} · {order.cashier_name}</b></div>
           <div className="kv"><span>Pelanggan</span><b>{order.customer_name || 'Umum'} {order.customer_phone}</b></div>
-          <div className="kv"><span>Pengambilan</span><b>{order.fulfillment === 'sekarang' ? 'Ditunggu' : `${order.fulfillment === 'antar' ? 'Diantar' : 'Diambil'} ${fmtDateTime(order.due_at)}`}</b></div>
+          <div className="kv"><span>Pengambilan</span><b>{order.fulfillment === 'sekarang' ? 'Ready' : `${order.fulfillment === 'antar' ? 'Diantar' : 'Diambil'} ${fmtDateTime(order.due_at)}`}</b></div>
           {order.fulfillment === 'antar' && <div className="kv"><span>Penerima</span><b>{order.recipient_name} {order.recipient_phone} · {order.delivery_address}</b></div>}
           {canEdit && order.delivery?.km ? <div className="kv"><span>Jarak antar</span><b>{(Math.ceil(order.delivery.km * 10) / 10).toLocaleString('id-ID')} km · ongkir {rp(order.extra_fee)}</b></div> : null}
           {order.card_message && <div className="kv"><span>Kartu ucapan</span><b>“{order.card_message}”</b></div>}

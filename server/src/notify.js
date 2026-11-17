@@ -23,7 +23,7 @@ export function fmtWib(d) {
   return `${p.weekday}, ${p.day} ${p.month} ${p.year} ${p.hour}:${p.minute} WIB`;
 }
 
-/** Rentang acara: berakhir di tenggat, mulai `leadMinutes` sebelumnya. Pesanan "ditunggu": 30 menit sejak dibuat. */
+/** Rentang acara: berakhir di tenggat, mulai `leadMinutes` sebelumnya. Pesanan "ready" (langsung diambil): 30 menit sejak dibuat. */
 export function eventWindow(order, leadMinutes) {
   const created = new Date(order.created_at || Date.now()).getTime();
   if (order.fulfillment === 'sekarang' || !order.due_at) return { start: created, end: created + 30 * 60e3 };
@@ -32,7 +32,7 @@ export function eventWindow(order, leadMinutes) {
 }
 
 const shortNo = (o) => String(o.no || '').split('-').pop();
-const fulfillLabel = (o) => (o.fulfillment === 'antar' ? 'Diantar' : o.fulfillment === 'ambil' ? 'Diambil' : 'Ditunggu di toko');
+const fulfillLabel = (o) => (o.fulfillment === 'antar' ? 'Diantar' : o.fulfillment === 'ambil' ? 'Diambil' : 'Ready (langsung diambil di toko)');
 
 /** Isi yang memengaruhi undangan; bila hash sama, tidak ada email baru. */
 export function contentHash(order, leadMinutes) {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createServer } from '../src/index.js';
+import { createServer, uaInfo } from '../src/index.js';
 
 let srv, store, base, dir;
 const json = async (method, p, body, token) => {
@@ -258,4 +258,79 @@ test('CORS: preflight mengizinkan header ngrok-skip-browser-warning; galat API s
   const g = await fetch(base + '/api/tidak-ada', { headers: { Authorization: `Bearer ${owner}`, 'ngrok-skip-browser-warning': '1' } });
   assert.equal(g.status, 404);
   assert.ok((await g.json()).error, 'rute API tak dikenal tetap menjawab JSON {error}, bukan halaman HTML');
+});
+
+const UA_HP = 'Mozilla/5.0 (Linux; Android 14; SM-A546E) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36';
+const UA_PC = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+const loginUa = async (body, ua) => {
+  const r = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': ua }, body: JSON.stringify(body) });
+  return { status: r.status, body: await r.json() };
+};
+
+test('v1.8 ringkasan User-Agent untuk daftar perangkat', () => {
+  assert.equal(uaInfo(UA_PC), 'Chrome · Windows');
+  assert.equal(uaInfo(UA_HP), 'Chrome · Android SM-A546E');
+  assert.equal(uaInfo('Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36'), 'Chrome · Android');
+  assert.equal(uaInfo('Mozilla/5.0 (Linux; Android 13; Pixel 7 Build/TQ3A.230805.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0.0.0 Mobile Safari/537.36'), 'Aplikasi Android · Pixel 7');
+  assert.equal(uaInfo('Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1'), 'Safari · iPhone');
+  assert.equal(uaInfo(UA_PC + ' Edg/130.0.0.0'), 'Edge · Windows');
+  assert.equal(uaInfo(''), '');
+});
+
+test('v1.8 login tanpa pilihan perangkat: jenis dikenali otomatis, fungsi mengikuti peran akun', async () => {
+  // HP perangkai: jenis dari User-Agent (H), fungsi dari peran perangkai (R). HR sudah dipakai dev-produksi → HR2.
+  const hp = await loginUa({ username: 'rangkai1', password: 'rangkai1', deviceId: 'dev-auto-hp' }, UA_HP);
+  assert.equal(hp.status, 200);
+  assert.equal(hp.body.device.code, 'HR2');
+  assert.equal(hp.body.device.name, 'HP Ruang Rangkai');
+  // hasil deteksi klien (layar sentuh besar = tablet) didahulukan dari User-Agent; fungsi dari peran kasir (K)
+  const tab = await loginUa({ username: 'kasir1', password: 'kasirBaru9', deviceId: 'dev-auto-tab', deviceKind: 'T' }, UA_PC);
+  assert.match(tab.body.device.code, /^TK\d+$/);
+  // owner di komputer: KO (Komputer Owner)
+  const pc = await loginUa({ username: 'vano', password: 'sandiBaru1', deviceId: 'dev-auto-pc' }, UA_PC);
+  assert.equal(pc.body.device.code, 'KO');
+  // perangkat yang sudah terdaftar: pilihan dari klien versi lama tidak lagi mengubah kode
+  const again = await loginUa({ username: 'kasir1', password: 'kasirBaru9', deviceId: 'dev-auto-hp', deviceKind: 'K', deviceFn: 'K' }, UA_HP);
+  assert.equal(again.body.device.code, 'HR2', 'kategori hanya diubah owner');
+});
+
+test('v1.8 owner mengelola perangkat: daftar + riwayat login, ganti nama & kategori; perangkat menerima kode barunya lewat sinkron', async () => {
+  // selain owner ditolak (juga endpoint lama)
+  assert.equal((await json('PATCH', '/api/devices/dev-auto-hp', { name: 'X' }, kasir)).status, 403);
+  assert.equal((await json('POST', '/api/devices/code', { kind: 'T', fn: 'K' }, kasir)).status, 403);
+  assert.equal((await json('GET', '/api/devices', null, perangkai)).status, 403);
+
+  const list = await json('GET', '/api/devices', null, owner);
+  assert.equal(list.status, 200);
+  const hp = list.body.devices.find((d) => d.id === 'dev-auto-hp');
+  assert.equal(hp.ua, 'Chrome · Android SM-A546E');
+  assert.equal(hp.logins, 2);
+  assert.equal(hp.user_name, 'Kasir 1', 'pengguna terakhir yang masuk');
+  assert.equal(list.body.devices.filter((d) => d.current).length, 1);
+  assert.equal(list.body.devices.find((d) => d.current).id, 'dev-kasir-1');
+  const log = list.body.logins.filter((l) => l.device_id === 'dev-auto-hp');
+  assert.deepEqual(log.map((l) => l.user_name), ['Kasir 1', 'Perangkai 1'], 'riwayat login terbaru di atas');
+
+  // ganti nama saja: kode tetap
+  const ren = await json('PATCH', '/api/devices/dev-auto-hp', { name: '  HP Nazra <b> ' }, owner);
+  assert.equal(ren.body.device.name, 'HP Nazra b');
+  assert.equal(ren.body.device.code, 'HR2');
+  // ganti kategori: kode baru, nama buatan owner dipertahankan, kode lama tetap dicadangkan
+  const cat = await json('PATCH', '/api/devices/dev-auto-hp', { kind: 'T', fn: 'R' }, owner);
+  assert.equal(cat.body.device.code, 'TR');
+  assert.equal(cat.body.device.name, 'HP Nazra b');
+  assert.equal((await json('PATCH', '/api/devices/dev-auto-hp', { kind: 'Z' }, owner)).status, 400);
+  assert.equal((await json('PATCH', '/api/devices/tidak-ada', { name: 'X' }, owner)).status, 404);
+  // nama dikosongkan: kembali ke nama bawaan kategori
+  const auto = await json('PATCH', '/api/devices/dev-auto-hp', { name: '' }, owner);
+  assert.equal(auto.body.device.name, 'Tablet Ruang Rangkai');
+  // perangkat lain tidak bisa mengambil kode yang pernah dipakai dev-auto-hp
+  const other = await loginUa({ username: 'rangkai1', password: 'rangkai1', deviceId: 'dev-auto-hp2' }, UA_HP);
+  assert.equal(other.body.device.code, 'HR3', 'HR2 tetap dicadangkan');
+  // perangkat menerima kode & nama barunya lewat koleksi devices saat sinkron
+  const pull = await json('GET', '/api/sync/pull?since=0', null, perangkai);
+  const rec = pull.body.changes.find((c) => c.c === 'devices' && c.id === 'dev-auto-hp');
+  assert.equal(rec.data.code, 'TR');
+  assert.equal(rec.data.name, 'Tablet Ruang Rangkai');
+  assert.equal(rec.data.ua, 'Chrome · Android SM-A546E');
 });

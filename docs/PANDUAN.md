@@ -163,7 +163,7 @@ Sinkron berjalan sendiri. Lencana di kanan atas: hijau “Tersinkron”, kuning 
     | KR / HR / TR | Komputer / HP / Tablet Ruang Rangkai | 261115-HR001 |
     | KO / HO / TO | Komputer / HP / Tablet Owner | 261115-HO001 |
 
-    Dipilih di layar masuk, atau diubah di Pengaturan › Perangkat. Perangkat sejenis kedua menjadi KK2, ketiga KK3. Kode yang pernah dipakai tidak diberikan ke perangkat lain, sehingga nomor struk tidak pernah kembar. Nomor struk lama (mis. 261115-A001) tidak berubah.
+    Sejak v1.8 kode diberikan otomatis saat perangkat pertama kali masuk (lihat bagian 8e) dan hanya owner yang mengubahnya di Pengaturan › Perangkat › Perangkat terdaftar. Perangkat sejenis kedua menjadi KK2, ketiga KK3. Kode yang pernah dipakai tidak diberikan ke perangkat lain, sehingga nomor struk tidak pernah kembar. Nomor struk lama (mis. 261115-A001) tidak berubah.
 11. **HPP hasil impor**: bila menu Produk menampilkan peringatan "HPP lebih besar dari harga jual", tekan **Perbaiki HPP**. Impor versi lama membaca nilai modal total Kasir Pintar (HPP × stok); perbaikan membagi nilai itu dengan stok awal impor. Contoh: Rp 149.998.950.000 ÷ 999.993 = Rp 150.000.
 
 ## 8a. Fitur Versi 1.4
@@ -220,6 +220,24 @@ Sinkron berjalan sendiri. Lencana di kanan atas: hijau “Tersinkron”, kuning 
 4. **Pembatalan & persetujuan owner** pindah ke detail kartu Produksi (ketuk nomor/isi kartu). Daftar pengajuan pembatalan untuk owner ada di atas papan Produksi; angka pengajuan tampil di menu Produksi.
 5. **Galat lewat ngrok/tunnel**: bila agen ngrok di PC toko berhenti, alamat ngrok menjawab dengan halaman galat HTML milik ngrok (ERR_NGROK_3200, endpoint offline), bukan jawaban JSON server Kasir Buket. Versi lama menampilkan setiap jawaban non-JSON sebagai "Galat <status>" (contoh: "Galat 404" saat hitung ongkir di HP), sedangkan PC yang membuka `localhost` tetap normal karena tidak lewat ngrok. Sekarang pesan menyebut penyebabnya, misalnya "Tunnel ngrok sedang mati (ERR_NGROK_3200). Jalankan lagi ngrok di PC toko", dan lencana sinkron berubah menjadi Offline. ERR_NGROK_8012 berarti ngrok hidup tetapi server di PC mati atau port berbeda. Aplikasi juga mengirim header `ngrok-skip-browser-warning` agar halaman peringatan ngrok gratis tidak menghalangi permintaan data.
 
+## 8e. Fitur Versi 1.8
+1. **Pengambilan "Ready"**: pilihan *Ditunggu* berganti nama menjadi **Ready** (barang siap, langsung dibawa). Berlaku di Kasir, detail pesanan, Riwayat, kartu Produksi, tiket produksi, dan email tugas perangkai. Struk tetap mencetak `AMBIL : SEKARANG`.
+2. **Riwayat**: filter *Jadwal* menjadi **Deadline**; urutan filter: Hari ini, 30 hari, Deadline, Belum lunas.
+3. **Layar masuk hanya username dan kata sandi.** Pilihan "Jenis perangkat ini" dan "Dipakai untuk" dihapus. Perangkat dikenali otomatis:
+   - Identitas: ID acak yang tersimpan di perangkat sejak pertama kali dibuka (tetap sama selama data browser/aplikasi tidak dihapus).
+   - Jenis: layar sentuh dengan sisi pendek < 600 px = HP, layar sentuh ≥ 600 px = Tablet, selain itu Komputer.
+   - Fungsi awal: mengikuti peran akun yang pertama masuk (Admin = Kasir, Perangkai = Ruang Rangkai, Owner = Owner).
+   - Perangkat yang sudah terdaftar tidak berubah kode saat masuk lagi, siapa pun yang masuk.
+4. **Pengaturan › Perangkat › Perangkat terdaftar** (owner): daftar semua perangkat yang pernah masuk, berisi kode, nama, browser dan sistem (mis. "Chrome · Android SM-A546E"), pengguna terakhir, waktu masuk terakhir, dan jumlah login. Owner mengisi **nama** (mis. "Tablet depan") dan memilih **jenis** serta **fungsi**, lalu Simpan. Bila kategori berubah, perangkat itu langsung memakai kode baru tanpa masuk ulang; kode lama tetap dicadangkan dan nomor struk yang sudah terbit tidak berubah. **Lihat riwayat login** menampilkan 30 login terakhir (waktu, pengguna, perangkat). Perangkat berkode versi lama (mis. "B") diberi kode baru setelah owner memilih jenis dan fungsinya.
+5. **"Perubahan ditolak server" dihapus dari layar.** Daftar itu berisi perubahan yang tidak diterima server. Sekarang ditangani otomatis: rekaman ber-ID tidak sah dibuang dari perangkat, penolakan lain membuat perangkat menarik ulang versi server. Penyebab baris `products/kp-` (impor Kasir Pintar 15 Nov 2026): baris produk tanpa ID dan tanpa kode barang menghasilkan ID "kp-" (3 karakter, di bawah syarat 4–64 karakter), sehingga ditolak dan tidak pernah sampai ke server. Sejak v1.8 baris seperti itu mendapat ID dari nama + harga + kategori; baris yang benar-benar kosong dilewati dan jumlahnya tampil di ringkasan impor. **Impor ulang berkas Kasir Pintar yang sama** (Pengaturan › Impor Kasir Pintar) untuk memasukkan produk yang dulu tertolak; data lain tidak menjadi ganda.
+6. **Sinkron lebih hemat**: server mengirim denyut lewat saluran realtime (SSE) tiap 25 detik. Selama denyut diterima, polling cadangan cukup 5 menit sekali (sebelumnya 30 detik sekali). Hitungan per perangkat untuk 12 jam buka: 12 × 3600 ÷ 30 = 1.440 permintaan menjadi 12 × 60 ÷ 5 = 144 permintaan. Bila saluran realtime terputus, polling kembali 30 detik sekali.
+7. **Peran ngrok dan rencana setelah VPS**:
+   - ngrok bukan bagian aplikasi. Fungsinya hanya meneruskan alamat publik HTTPS ke server di PC toko, untuk perangkat di luar WiFi toko. Perangkat di WiFi yang sama cukup membuka `http://IP-KOMPUTER:8080` tanpa ngrok.
+   - Batas ngrok gratis: 20.000 permintaan HTTP dan 1 GB data keluar per bulan, 1 domain. Dengan polling lama, 20.000 ÷ 1.440 ≈ 13,9 hari-perangkat (3 perangkat ≈ 4,6 hari). Dengan v1.8: 20.000 ÷ 144 ≈ 138 hari-perangkat (3 perangkat × 30 hari = 90 hari-perangkat, kira-kira 65% kuota, belum termasuk transaksi dan buka halaman).
+   - Cloudflare Quick Tunnel (alamat `trycloudflare.com`) tidak cocok: tidak mendukung SSE, alamat acak tiap dijalankan, tanpa jaminan layanan.
+   - Setelah server pindah ke VPS (bagian 3): ngrok tidak diperlukan lagi. Hapus agen ngrok dari PC, lalu di tiap perangkat buka alamat VPS dan masuk. Header `ngrok-skip-browser-warning` hanya dikirim bila alamat server mengandung "ngrok", jadi otomatis berhenti; pesan galat untuk jawaban non-JSON tetap berguna (mis. saat layanan di VPS sedang dimulai ulang).
+8. **Pembaruan sekali klik di PC toko**: klik dua kali `deploy\perbarui.bat`. Urutannya: (1) build aplikasi; (2) hentikan server lama, salin basis data ke `data\backups\sebelum-pembaruan-<waktu>-kasir.db` (5 set terakhir disimpan), jalankan server baru; (3) commit; (4) push ke GitHub. Bila build gagal, server tidak diubah. Hasil tiap langkah tercatat di `deploy\perbarui.log`. Karena repositori bersifat publik, berkas baru yang bukan berkas sumber (basis data, ekspor JSON, Excel/CSV, arsip, kunci) tidak pernah ikut commit otomatis dan hanya disebut di catatan.
+
 ## 9. Lupa Kata Sandi
 1. **Lewat email (disarankan).** Owner mengatur sekali: Pengaturan › Reset Password › Email Reset › isi **Akun GMAIL Toko** dan **Pass Email Toko** (*app password*: Akun Google › Keamanan › Verifikasi 2 Langkah aktif › myaccount.google.com/apppasswords) › Simpan › **Tes Email**. Lalu isi email tiap pengguna di Pengaturan › Pengguna. Di halaman masuk, ketuk **Lupa kata sandi?**, masukkan username atau email, masukkan kode 6 digit dari email (berlaku 15 menit), lalu buat sandi baru.
 2. **Staf lupa sandi**: owner cukup menekan tombol **Sandi** di Pengaturan › Pengguna.
@@ -270,3 +288,11 @@ Setiap basis data punya ID unik. Bila perangkat masuk ke server dengan ID berbed
 - **Tunnel (ngrok)**: perantara yang meneruskan alamat publik HTTPS ke server di PC toko. Bila agen ngrok di PC berhenti, alamat publik menjawab halaman galat ngrok.
 - **ERR_NGROK_3200**: kode ngrok untuk endpoint offline (agen ngrok tidak berjalan, berhenti, atau alamat salah).
 - **ERR_NGROK_8012**: kode ngrok saat agen berjalan tetapi gagal menyambung ke aplikasi lokal (server mati atau port salah).
+- **SSE (Server-Sent Events)**: saluran satu arah dari server ke perangkat yang tetap terbuka; dipakai untuk memberi tahu ada data baru tanpa menunggu polling.
+- **Polling**: perangkat bertanya ke server secara berkala apakah ada data baru.
+- **Denyut (heartbeat)**: pesan kecil berkala lewat SSE sebagai tanda saluran masih hidup.
+- **Hari-perangkat**: satuan pemakaian = 1 perangkat aktif selama 1 hari; 3 perangkat selama 30 hari = 90 hari-perangkat.
+- **User-Agent**: keterangan browser dan sistem yang dikirim perangkat pada setiap permintaan; dipakai untuk mengisi kolom info di daftar perangkat.
+- **Build**: mengubah kode sumber aplikasi menjadi berkas siap pakai di `app/dist` yang disajikan server.
+- **Commit / push**: commit menyimpan perubahan ke riwayat Git di PC; push mengirim riwayat itu ke GitHub.
+- **ID deterministik**: ID yang dihitung dari isi data, sehingga impor ulang berkas yang sama menghasilkan ID yang sama dan tidak menggandakan data.

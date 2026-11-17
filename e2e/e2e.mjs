@@ -55,10 +55,22 @@ try {
   await A.getByLabel('Nama pemilik').fill('Vano');
   await A.getByLabel('Username').fill('vano');
   await A.getByLabel('Kata sandi (min. 6)').fill('rahasia1');
-  assert(/Kode nomor struk: KK/.test(await A.getByTestId('kode-preview').textContent()), 'komputer terdeteksi: kode KK (Komputer Kasir)');
+  assert((await A.getByText('Jenis perangkat ini').count()) === 0 && (await A.getByText('Dipakai untuk').count()) === 0, 'layar penyiapan tanpa pilihan jenis & fungsi perangkat');
   await A.getByRole('button', { name: 'Siapkan toko' }).click();
   await A.getByTestId('sync-badge').waitFor();
   assert(true, 'setup toko & login owner');
+  // perangkat dikenali otomatis (komputer + akun owner = KO); owner memberi nama dan mengkategorikannya sebagai Kasir
+  await A.goto(BASE + '/#/pengaturan');
+  await A.getByTestId('device-row').first().waitFor();
+  assert((await A.getByTestId('device-code').textContent()) === 'KO', 'perangkat pertama dikenali otomatis: Komputer + akun owner = kode KO');
+  assert((await A.getByText('Perubahan ditolak server').count()) === 0, 'daftar teknis "Perubahan ditolak server" tidak lagi ditampilkan');
+  const rowA = A.getByTestId('device-row').first();
+  assert(/perangkat ini/.test(await rowA.textContent()) && /Chrome/.test(await rowA.textContent()) && /1× login/.test(await rowA.textContent()), 'daftar perangkat owner: browser, pengguna terakhir, jumlah login');
+  await rowA.getByLabel('Nama perangkat KO').fill('Komputer depan');
+  await rowA.getByLabel('Fungsi perangkat KO').selectOption('K');
+  await rowA.getByTestId('device-save').click();
+  await A.getByTestId('device-code').filter({ hasText: /^KK$/ }).waitFor({ timeout: 10000 });
+  assert((await A.getByTestId('device-name').textContent()) === 'Komputer depan', 'owner mengganti nama + kategori: kode perangkat ini langsung menjadi KK, nama "Komputer depan"');
 
   // produk
   await A.goto(BASE + '/#/produk');
@@ -71,6 +83,25 @@ try {
   }
   await A.waitForFunction(() => document.querySelectorAll('.trow').length === 3, null, { timeout: 5000 }).catch(async () => { await A.screenshot({ path: path.join(SHOTS, 'debug-produk.png') }); });
   assert((await A.locator('.trow').count()) === 3, '3 produk tersimpan');
+  // perubahan yang ditolak server (ID tidak sah, mis. "kp-" dari impor lama) tidak boleh tertinggal sebagai data hantu
+  const idb = (fn, arg) => A.evaluate(async ([src, a]) => {
+    const req = indexedDB.open('kasir-buket');
+    const dbx = await new Promise((r) => { req.onsuccess = () => r(req.result); });
+    return (0, eval)(`(${src})`)(dbx, a);
+  }, [fn.toString(), arg]);
+  await idb(async (dbx) => {
+    const tx = dbx.transaction(['products', 'outbox'], 'readwrite');
+    tx.objectStore('products').put({ id: 'kp-', name: 'Produk hantu', price: 1, active: true });
+    tx.objectStore('outbox').add({ c: 'products', id: 'kp-', patch: { name: 'Produk hantu', price: 1, active: true } });
+    await new Promise((r) => { tx.oncomplete = r; });
+  });
+  await A.getByTestId('sync-badge').click();
+  let ghost = true;
+  for (let i = 0; i < 40 && ghost; i++) {
+    await A.waitForTimeout(250);
+    ghost = await idb((dbx) => new Promise((r) => { const q = dbx.transaction('products').objectStore('products').get('kp-'); q.onsuccess = () => r(!!q.result); }));
+  }
+  assert(!ghost && (await A.locator('.trow').count()) === 3, 'perubahan ber-ID tidak sah ditolak server lalu dibuang otomatis dari perangkat (tanpa daftar galat untuk pengguna)');
 
   // pengguna perangkai
   await A.goto(BASE + '/#/pengaturan');
@@ -150,11 +181,26 @@ try {
   await B.goto(BASE);
   await B.getByLabel('Username').fill('rangkai1');
   await B.getByLabel('Kata sandi').fill('rangkai1');
-  await B.getByRole('radio', { name: 'Ruang Rangkai' }).click();
-  assert(/Kode nomor struk: HR/.test(await B.getByTestId('kode-preview').textContent()), 'HP terdeteksi otomatis, fungsi ruang rangkai: kode HR');
+  assert((await B.getByText('Jenis perangkat ini').count()) === 0 && (await B.getByRole('radio').count()) === 0, 'layar masuk hanya username dan kata sandi');
+  await B.screenshot({ path: path.join(SHOTS, '24-masuk-tanpa-pilihan.png') });
   await B.getByRole('button', { name: 'Masuk' }).click();
   await B.getByTestId('sync-badge').waitFor();
   await B.goto(BASE + '/#/pengaturan');
+  await B.getByTestId('device-code').filter({ hasText: /^HR$/ }).waitFor({ timeout: 10000 });
+  assert((await B.getByTestId('device-admin').count()) === 0, 'HP perangkai dikenali otomatis (HP + akun perangkai = HR); daftar perangkat hanya untuk owner');
+  // owner melihat perangkat baru di riwayat login, lalu memberinya nama; HP itu menerima namanya tanpa masuk ulang
+  await A.goto(BASE + '/#/pengaturan');
+  const rowHR = A.getByTestId('device-row').filter({ has: A.locator('.code', { hasText: /^HR$/ }) });
+  await rowHR.waitFor({ timeout: 15000 });
+  assert(/Android/.test(await rowHR.textContent()) && /Sari/.test(await rowHR.textContent()), `owner melihat HP baru: ${(await rowHR.locator('.muted').textContent()).replace(/\s+/g, ' ').trim()}`);
+  await rowHR.getByLabel('Nama perangkat HR').fill('HP ruang rangkai');
+  await rowHR.getByTestId('device-save').click();
+  await B.getByTestId('device-name').filter({ hasText: 'HP ruang rangkai' }).waitFor({ timeout: 15000 });
+  assert((await B.getByTestId('device-code').textContent()) === 'HR', 'nama dari owner sampai ke HP perangkai lewat sinkron; kode tetap HR');
+  await A.getByTestId('login-log-toggle').click();
+  const logTxt = await A.getByTestId('login-log').textContent();
+  assert(/Sari/.test(logTxt) && /Vano/.test(logTxt), 'riwayat login mencatat siapa masuk dari perangkat mana');
+  await A.getByTestId('device-admin').screenshot({ path: path.join(SHOTS, '23-perangkat-terdaftar.png') });
   await B.getByRole('radio', { name: 'Printer' }).click();
   await B.getByTestId('printer-produksi').locator('select').selectOption('system');
   await B.getByTestId('station-produksi').check();
@@ -534,8 +580,9 @@ try {
   await D.getByTestId('product-card').filter({ hasText: 'Buket Snack' }).locator('.pcard').click();
   await D.getByTestId('btn-bayar').click();
   await D.getByTestId('engage').waitFor();
+  await D.getByTestId('review-budget').filter({ hasText: /1 transaksi/ }).waitFor({ timeout: 15000 }).catch(() => {}); // angka pemakaian dihitung async
   const rbD = await D.getByTestId('review-budget').textContent();
-  assert(/Rp\s?10\.000/.test(rbD) && /1 transaksi/.test(rbD), 'budget tersinkron antarperangkat: perangkat Admin melihat sisa Rp 10.000');
+  assert(/Rp\s?10\.000/.test(rbD) && /1 transaksi/.test(rbD), `budget tersinkron antarperangkat: perangkat Admin melihat sisa Rp 10.000 (${rbD.replace(/\s+/g, ' ').trim()})`);
   await D.getByRole('button', { name: 'Lewati' }).click();
   await D.getByLabel('Nomor HP', { exact: true }).fill('0813 9999 0000');
   assert(await D.getByTestId('cust-found').count() === 0 && /tetap bisa dilanjutkan/.test(await D.locator('.field', { has: D.getByLabel('Nomor HP', { exact: true }) }).textContent()), 'nomor HP belum tersimpan: transaksi tetap bisa dilanjutkan');

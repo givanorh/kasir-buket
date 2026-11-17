@@ -2,22 +2,25 @@
 //  - saat aplikasi dibuka/login, saat kembali ke depan (resume), saat internet tersambung lagi
 //  - 0,4 detik setelah setiap perubahan lokal (push)
 //  - saat server memberi tahu ada data baru lewat SSE (pull, hampir seketika)
-//  - cadangan: polling tiap 30 detik bila SSE terhalang
+//  - cadangan: polling tiap 30 detik bila SSE terhalang; selama SSE hidup (denyut server tiap 25 detik) cukup 5 menit sekali
 // Konsistensi: server memberi nomor urut (seq) global; perangkat menarik semua perubahan seq > kursor.
 // Perubahan lokal yang belum terkirim (outbox) selalu diterapkan ulang di atas data server,
 // sehingga edit offline tidak tertimpa. Penggabungan per kolom (patch), bukan per rekaman.
 import { useSyncExternalStore } from 'react';
 import { db, getMeta, setMeta } from './db';
-import { api, ApiError, getSession, logout, updateSession } from './session';
+import { api, ApiError, applyDeviceRecord, getSession, logout, updateSession } from './session';
 import { COLLECTIONS } from './types';
 
 export interface SyncStatus {
   online: boolean; syncing: boolean; pending: number; lastSync: number | null; error: string | null; authError: boolean; cursor: number;
 }
 
+const ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
 const PUSH_BATCH = 200;
 const PULL_LIMIT = 1000;
 const POLL_MS = 30000;
+const SSE_ALIVE_MS = 70000; // dua denyut server terlewat = saluran SSE dianggap putus
+const IDLE_POLL_MS = 5 * 60 * 1000;
 
 class SyncEngine {
   status: SyncStatus = { online: true, syncing: false, pending: 0, lastSync: null, error: null, authError: false, cursor: 0 };
@@ -30,6 +33,8 @@ class SyncEngine {
   private backoff = 2000;
   private es: EventSource | null = null;
   private started = false;
+  private sseAt = 0; // denyut SSE terakhir
+  private pullAt = 0; // sinkron berhasil terakhir
 
   subscribe = (l: () => void) => { this.listeners.add(l); return () => { this.listeners.delete(l); }; };
   private set(p: Partial<SyncStatus>) { this.status = { ...this.status, ...p }; this.listeners.forEach((l) => l()); }
@@ -40,11 +45,12 @@ class SyncEngine {
   async start() {
     if (this.started) return;
     this.started = true;
+    await this.cleanLegacyRejects().catch(() => {});
     this.set({ cursor: await getMeta<number>('cursor', 0), pending: await db.outbox.count() });
     window.addEventListener('online', this.onOnline);
     document.addEventListener('visibilitychange', this.onVisible);
     window.addEventListener('focus', this.onOnline);
-    this.pollTimer = setInterval(() => this.run(), POLL_MS);
+    this.pollTimer = setInterval(() => this.poll(), POLL_MS);
     this.connectEvents();
     this.run();
   }
@@ -66,13 +72,27 @@ class SyncEngine {
     this.es?.close();
     const es = new EventSource(`${s.serverUrl.replace(/\/+$/, '')}/api/events?token=${encodeURIComponent(s.token)}`);
     es.addEventListener('seq', (ev) => {
+      this.sseAt = Date.now();
       try {
         const { seq } = JSON.parse((ev as MessageEvent).data);
         if (seq > this.status.cursor) this.run();
       } catch { /* abaikan */ }
     });
-    es.onopen = () => { if (!this.status.online) this.run(); };
+    es.onopen = () => { this.sseAt = Date.now(); if (!this.status.online) this.run(); };
+    es.onerror = () => { this.sseAt = 0; };
     this.es = es;
+  }
+
+  /**
+   * Polling cadangan. Selama SSE hidup, perubahan sudah datang seketika lewat SSE, jadi cukup satu pull per 5 menit:
+   * 12 permintaan/jam per perangkat, bukan 120. Penting bila server diakses lewat tunnel berkuota (ngrok gratis:
+   * 20.000 permintaan/bulan) dan menghemat baterai serta data di HP.
+   */
+  private poll() {
+    const now = Date.now();
+    const sseAlive = now - this.sseAt < SSE_ALIVE_MS;
+    if (sseAlive && this.status.online && !this.status.pending && now - this.pullAt < IDLE_POLL_MS) return;
+    this.run();
   }
 
   /** Dipanggil setelah setiap tulis lokal. */
@@ -94,6 +114,7 @@ class SyncEngine {
         await this.pull();
       } while (this.again);
       this.backoff = 2000;
+      this.pullAt = Date.now();
       this.set({ online: true, error: null, lastSync: Date.now(), pending: await db.outbox.count() });
     } catch (e) {
       const err = e as ApiError;
@@ -123,11 +144,13 @@ class SyncEngine {
         timeout: 60000,
       });
       const rejected = res.results.filter((r) => r.error);
+      await db.outbox.bulkDelete(batch.map((b) => b.seq!));
       if (rejected.length) {
+        // catatan diagnostik (tidak ditampilkan), lalu samakan lagi data perangkat ini dengan server
         const log = await getMeta<any[]>('sync_errors', []);
         await setMeta('sync_errors', [...rejected.map((r) => ({ ...r, at: new Date().toISOString() })), ...log].slice(0, 50));
+        await this.rollback(rejected);
       }
-      await db.outbox.bulkDelete(batch.map((b) => b.seq!));
       this.set({ pending: await db.outbox.count() });
     }
   }
@@ -168,11 +191,43 @@ class SyncEngine {
           }
           await setMeta('cursor', res.cursor);
         });
+        // owner mengganti nama/kategori perangkat ini: kode nomor struk langsung ikut berubah
+        const mine = res.changes.filter((ch) => ch.c === 'devices' && !ch.del && ch.id === getSession().deviceId).pop();
+        if (mine) await applyDeviceRecord(mine.data);
       }
       cursor = res.cursor;
       this.set({ cursor });
       if (!res.more) return;
     }
+  }
+
+  /**
+   * Perubahan yang ditolak server tidak boleh tertinggal di perangkat ini sebagai data "hantu".
+   * ID tidak sah (mustahil diterima server): rekaman lokalnya dihapus. Penolakan lain (izin, aturan):
+   * kursor dikembalikan ke 0 sehingga pull berikutnya menimpa rekaman itu dengan versi server.
+   */
+  private async rollback(rejected: { c: string; id: string; error?: string }[]) {
+    let repull = false;
+    for (const r of rejected) {
+      if (!(COLLECTIONS as string[]).includes(r.c)) continue;
+      if (r.error === 'ID tidak valid' || !ID_RE.test(String(r.id ?? ''))) await db.table(r.c).delete(r.id);
+      else repull = true;
+    }
+    // tarik ulang penuh paling sering 10 menit sekali; pull pada putaran yang sama langsung memakai kursor 0
+    if (repull && Date.now() - (await getMeta<number>('repull_at', 0)) > 10 * 60 * 1000) {
+      await setMeta('repull_at', Date.now());
+      await setMeta('cursor', 0);
+    }
+  }
+
+  /** Sekali per perangkat: bersihkan sisa penolakan "ID tidak valid" dari versi sebelum v1.8 (mis. produk impor ber-ID "kp-"). */
+  private async cleanLegacyRejects() {
+    if (await getMeta<boolean>('rejects_cleaned', false)) return;
+    const log = await getMeta<{ c: string; id: string; error?: string }[]>('sync_errors', []);
+    for (const r of log) {
+      if ((COLLECTIONS as string[]).includes(r.c) && r.error === 'ID tidak valid') await db.table(r.c).delete(r.id);
+    }
+    await setMeta('rejects_cleaned', true);
   }
 
   /** Tarik ulang seluruh data dari nol (perubahan lokal yang belum terkirim tetap dipertahankan). */
