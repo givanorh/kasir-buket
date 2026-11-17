@@ -128,8 +128,8 @@ Catatan: Chrome mungkin meminta Anda mengetik “allow pasting” sebelum bisa m
 ## 7. Pemakaian Harian
 1. **Buka shift** (menu Shift, atau langsung di halaman Kasir): isi kas awal. Akun Admin dan Perangkai tidak bisa memakai Kasir sebelum shift dibuka; owner tetap bisa.
 2. **Transaksi**: pilih produk › Bayar › isi pelanggan, pengambilan, kartu ucapan, catatan › pilih Lunas/DP › Simpan. Dua cetakan keluar otomatis.
-3. **Ruang perangkai**: menu Produksi, ketuk “Mulai rangkai” › “Selesai dirangkai” › “Sudah diambil”. Status langsung terlihat di kasir.
-4. **Pelunasan DP**: Pesanan › Belum lunas › pilih › Catat pembayaran.
+3. **Ruang perangkai** (akun perangkai): menu Produksi, ketuk “Mulai rangkai” › “Selesai dirangkai”. Status langsung terlihat di kasir.
+4. **Pengambilan & pelunasan DP** (akun kasir/Admin): Produksi › kolom Siap diambil/antar. Pesanan yang masih DP menampilkan **Bayar pelunasan** › pilih metode › Bayar; struk pelunasan tercetak otomatis. Setelah lunas, tombol berganti **Sudah diambil**.
 5. **Kas keluar** (beli plastik, ongkir kurir): menu Shift › Kas masuk/keluar.
 6. **Tutup shift**: hitung uang di laci, isi kas aktual, lihat selisih.
 7. **Hari ramai** (Valentine, wisuda): isi kapasitas harian di Pengaturan › Toko. Kasir melihat peringatan saat tanggal pesanan sudah penuh; Laporan menampilkan jadwal 14 hari.
@@ -202,7 +202,23 @@ Sinkron berjalan sendiri. Lencana di kanan atas: hijau “Tersinkron”, kuning 
 3. **Kalender**: kategori **Libur Nasional, Lokal, Puncak Penjualan** (dulu Momen buket), **Lonjakan data, Toko**. Kategori *Musim* dihapus: Ramadan dihapus dari kalender, buket uang menjelang Lebaran dan wisuda menjadi Puncak Penjualan (otomatis saat owner membuka Kalender). Filter kategori menampilkan jumlah event; **Urutkan › Total omzet** memeringkat event (event yang belum terjadi memakai omzet tahun lalu).
 4. **Google Calendar owner** (Kalender › tombol Google Calendar): centang aktif, penerima = email akun owner (Pengaturan › Pengguna) + email tambahan (maks. 10), pilih kategori, **Simpan & sinkronkan**. Event masa depan dan event rutin dikirim sebagai acara sepanjang hari (event rutin berulang tiap tahun). Ubah/hapus event di aplikasi, kalender penerima ikut berubah; mematikan sinkron menghapus acara dari kalender penerima. Pengingat H-7 dan H-3 pukul 08.00 WIB dikirim server sebagai email karena Google Calendar tidak memakai alarm dari undangan email. Agar juga muncul notifikasi di HP: Google Calendar › Setelan › pilih kalender › Notifikasi acara sepanjang hari › tambah "1 minggu sebelumnya" dan "3 hari sebelumnya".
 5. **Lihat sandi** (Pengaturan › Pengguna › Lihat): menampilkan sandi yang diatur owner (saat membuat pengguna atau lewat tombol Sandi). Disimpan terenkripsi AES-256-GCM dengan kunci server. Sandi yang diganti pengguna sendiri lewat "Lupa kata sandi?" tidak disimpan; sandi lama sebelum v1.6 juga belum tersimpan, jadi atur ulang sekali lewat tombol Sandi.
-6. **Perubahan nama**: tab Email menjadi **Reset Password** (Email Reset, Akun GMAIL Toko, Pass Email Toko, Tes Email); "undangan" untuk perangkai menjadi **Tugas**; kolom Nomor HP di Pembayaran tanpa keterangan opsional. Formulir Tambah pengguna tidak lagi diisi otomatis oleh browser dengan username/sandi owner.
+6. **Reset Password (perbaikan v1.6.1)**: untuk Gmail, Pass Email Toko wajib App Password 16 huruf; spasi dan karakter tak terlihat hasil salin dibuang, sandi Gmail biasa ditolak sebelum disimpan, dan jumlah huruf tampil saat mengetik. **Tes Email** memakai isian yang sedang tampil (belum perlu Simpan). Kolom Kirim ke kosong: dikirim ke email akun owner; bila owner belum punya email, ke Akun GMAIL Toko sendiri. Penolakan Google (535 5.7.8) diterjemahkan menjadi langkah perbaikan.
+7. **Perubahan nama**: tab Email menjadi **Reset Password** (Email Reset, Akun GMAIL Toko, Pass Email Toko, Tes Email); "undangan" untuk perangkai menjadi **Tugas**; kolom Nomor HP di Pembayaran tanpa keterangan opsional. Formulir Tambah pengguna tidak lagi diisi otomatis oleh browser dengan username/sandi owner.
+
+## 8d. Fitur Versi 1.7
+1. **Menu Riwayat** (dulu Pesanan) dipindah ke bawah Produksi. Riwayat hanya catatan: ketuk transaksi untuk melihat **invoice** (pratinjau struk) dan **status transaksi** (pembayaran, produksi, tanggal siap/diambil, pembatalan). Transaksi DP menampilkan nominal + tanggal DP dan nominal + tanggal pelunasan. Tidak ada form pelunasan, ubah status, atau pembatalan di Riwayat; tersedia Cetak ulang struk. Tautan lama `#/pesanan` otomatis dialihkan ke `#/riwayat`.
+2. **Wewenang tombol Produksi** (tombol yang bukan wewenang akun tampil abu-abu):
+
+| Status → tujuan | Perangkai | Kasir/Admin | Owner |
+|---|---|---|---|
+| Antri → Dirangkai (Mulai rangkai) | ya | abu-abu | ya |
+| Dirangkai → Siap (Selesai dirangkai) | ya | abu-abu | ya |
+| Siap → Selesai (Sudah diambil) | abu-abu | ya, bila sisa tagihan = 0 | ya, bila sisa tagihan = 0 |
+| Siap + masih DP/belum bayar | abu-abu ("Sudah diambil") | **Bayar pelunasan** | **Bayar pelunasan** |
+
+3. **Jendela pelunasan**: riwayat pembayaran bertanggal, sisa tagihan, metode, nominal (bawaan = seluruh sisa; boleh sebagian), uang diterima dan kembalian untuk tunai. Bila sisa menjadi Rp 0, printer kasir mencetak **STRUK PELUNASAN** berisi DP (metode, nominal, tanggal), pelunasan (metode, nominal, tanggal), dan status LUNAS. Pesanan lama yang sudah diambil tetapi belum lunas tampil di bagian **Sudah diambil, belum lunas** di bawah papan Produksi.
+4. **Pembatalan & persetujuan owner** pindah ke detail kartu Produksi (ketuk nomor/isi kartu). Daftar pengajuan pembatalan untuk owner ada di atas papan Produksi; angka pengajuan tampil di menu Produksi.
+5. **Galat lewat ngrok/tunnel**: bila agen ngrok di PC toko berhenti, alamat ngrok menjawab dengan halaman galat HTML milik ngrok (ERR_NGROK_3200, endpoint offline), bukan jawaban JSON server Kasir Buket. Versi lama menampilkan setiap jawaban non-JSON sebagai "Galat <status>" (contoh: "Galat 404" saat hitung ongkir di HP), sedangkan PC yang membuka `localhost` tetap normal karena tidak lewat ngrok. Sekarang pesan menyebut penyebabnya, misalnya "Tunnel ngrok sedang mati (ERR_NGROK_3200). Jalankan lagi ngrok di PC toko", dan lencana sinkron berubah menjadi Offline. ERR_NGROK_8012 berarti ngrok hidup tetapi server di PC mati atau port berbeda. Aplikasi juga mengirim header `ngrok-skip-browser-warning` agar halaman peringatan ngrok gratis tidak menghalangi permintaan data.
 
 ## 9. Lupa Kata Sandi
 1. **Lewat email (disarankan).** Owner mengatur sekali: Pengaturan › Reset Password › Email Reset › isi **Akun GMAIL Toko** dan **Pass Email Toko** (*app password*: Akun Google › Keamanan › Verifikasi 2 Langkah aktif › myaccount.google.com/apppasswords) › Simpan › **Tes Email**. Lalu isi email tiap pengguna di Pengaturan › Pengguna. Di halaman masuk, ketuk **Lupa kata sandi?**, masukkan username atau email, masukkan kode 6 digit dari email (berlaku 15 menit), lalu buat sandi baru.
@@ -249,3 +265,8 @@ Setiap basis data punya ID unik. Bila perangkat masuk ke server dengan ID berbed
 - **Median ±14 hari**: nilai tengah omzet harian 14 hari sebelum dan sesudah suatu tanggal; dipakai sebagai pembanding agar hari ramai terlihat sebagai rasio (mis. 21,4× = 21,4 kali hari biasa).
 - **Metode periodik**: HPP dihitung dari total pembelian bahan pada periode, bukan dari modal per produk.
 - **H-1**: satu hari sebelum jadwal ambil/antar.
+- **DP (down payment)**: uang muka; sisa tagihan = total − Σ pembayaran tidak void.
+- **Pelunasan**: pembayaran yang menutup sisa tagihan DP; tercatat sebagai pembayaran jenis `pelunasan` dengan tanggalnya sendiri.
+- **Tunnel (ngrok)**: perantara yang meneruskan alamat publik HTTPS ke server di PC toko. Bila agen ngrok di PC berhenti, alamat publik menjawab halaman galat ngrok.
+- **ERR_NGROK_3200**: kode ngrok untuk endpoint offline (agen ngrok tidak berjalan, berhenti, atau alamat salah).
+- **ERR_NGROK_8012**: kode ngrok saat agen berjalan tetapi gagal menyambung ke aplikasi lokal (server mati atau port salah).

@@ -4,6 +4,7 @@ import type { ReactElement } from 'react';
 const P: Record<string, ReactElement> = {
   kasir: <><path d="M5 8h14l-1.2 11.1a2 2 0 0 1-2 1.9H8.2a2 2 0 0 1-2-1.9L5 8Z" /><path d="M9 8V6.5a3 3 0 0 1 6 0V8" /></>,
   pesanan: <><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Z" /><path d="M9 8h6M9 12h6M9 16h3" /></>,
+  riwayat: <><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.5" /><path d="M3.5 3.5v5h5" /><path d="M12 7.5V12l3 2" /></>,
   produksi: <><circle cx="12" cy="8" r="3" /><path d="M12 5c0-2 3-3 3 0M12 5c0-2-3-3-3 0M9 8c-2 0-3 3 0 3M15 8c2 0 3 3 0 3" /><path d="M12 11v10M12 16c-2-2-4-2-5-1M12 18c2-2 4-2 5-1" /></>,
   produk: <><path d="M3 12V4h8l9 9-8 8-9-9Z" /><circle cx="7.5" cy="8.5" r="1.5" /></>,
   pelanggan: <><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5" /><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18.5 14.8c1.6.8 2.6 2.5 3 5.2" /></>,

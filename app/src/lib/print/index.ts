@@ -80,7 +80,7 @@ export async function sendToPrinter(target: string, cfg: PrinterConfig, doc: Lin
   }
 }
 
-async function docFor(order: Order, kind: 'struk' | 'tiket', copyLabel?: string) {
+export async function docFor(order: Order, kind: 'struk' | 'tiket', copyLabel?: string) {
   const st = await db.settings.get('toko');
   if (kind === 'tiket') return buildTiket(order, st);
   const pays = await db.payments.where('order_id').equals(order.id).toArray();

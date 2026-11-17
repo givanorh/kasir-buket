@@ -232,3 +232,30 @@ test('gaji & biaya (koleksi costs): hanya owner yang menulis dan menarik; kursor
   const ow = await json('GET', `/api/sync/pull?since=${head0}`, null, owner);
   assert.equal(ow.body.changes.find((c) => c.c === 'costs').data.salary, 1400000);
 });
+
+test('Reset Password: App Password Gmail wajib 16 huruf; Tes Email memakai isian formulir; tanpa email owner dikirim ke Akun GMAIL Toko', async () => {
+  const bad = await json('POST', '/api/email-config', { host: 'smtp.gmail.com', port: 465, user: 'toko@gmail.com', pass: 'sandiBiasa123', from: 'toko@gmail.com' }, owner);
+  assert.equal(bad.status, 400, 'sandi Gmail biasa ditolak sebelum disimpan');
+  assert.match(bad.body.error, /16 huruf \(yang terisi 10 huruf\)/);
+  assert.equal((await json('GET', '/api/email-config', null, owner)).body.passLen, 7, 'pengaturan lama tetap utuh');
+  const vano = (await json('GET', '/api/users', null, owner)).body.users.find((u) => u.username === 'vano');
+  await json('PATCH', `/api/users/${vano.id}`, { email: '' }, owner); // owner belum punya email
+  await startFakeSmtp();
+  const salah = await json('POST', '/api/email-config/test', { host: '127.0.0.1', port: smtpPort, user: 'toko@gmail.com', pass: 'salah' }, owner);
+  assert.equal(salah.status, 502, 'isian formulir yang salah ikut diuji walau belum disimpan');
+  const ok = await json('POST', '/api/email-config/test', { host: '127.0.0.1', port: smtpPort, user: 'toko@gmail.com', pass: 'app pass' }, owner);
+  assert.equal(ok.status, 200);
+  assert.deepEqual([ok.body.to, ok.body.via], ['toko@gmail.com', 'toko'], 'tujuan cadangan = Akun GMAIL Toko');
+  const manual = await json('POST', '/api/email-config/test', { to: 'Givanorh@Gmail.com', host: '127.0.0.1', port: smtpPort, user: 'toko@gmail.com', pass: 'app pass' }, owner);
+  assert.deepEqual([manual.body.to, manual.body.via], ['givanorh@gmail.com', 'manual']);
+  smtp.close();
+});
+
+test('CORS: preflight mengizinkan header ngrok-skip-browser-warning; galat API selalu JSON', async () => {
+  const r = await fetch(base + '/api/sync/pull', { method: 'OPTIONS', headers: { Origin: 'https://contoh.app', 'Access-Control-Request-Headers': 'authorization, content-type, ngrok-skip-browser-warning' } });
+  assert.equal(r.status, 204);
+  assert.match(r.headers.get('access-control-allow-headers'), /ngrok-skip-browser-warning/);
+  const g = await fetch(base + '/api/tidak-ada', { headers: { Authorization: `Bearer ${owner}`, 'ngrok-skip-browser-warning': '1' } });
+  assert.equal(g.status, 404);
+  assert.ok((await g.json()).error, 'rute API tak dikenal tetap menjawab JSON {error}, bukan halaman HTML');
+});

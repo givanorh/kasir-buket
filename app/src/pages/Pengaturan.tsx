@@ -503,7 +503,7 @@ function ImportTab() {
 }
 
 
-interface EmailCfg { host?: string; port?: number; user?: string; from?: string; fromName?: string; hasPassword?: boolean; configured: boolean }
+interface EmailCfg { host?: string; port?: number; user?: string; from?: string; fromName?: string; hasPassword?: boolean; configured: boolean; passLen?: number }
 function EmailTab() {
   const [cfg, setCfg] = useState<EmailCfg | null>(null);
   const [f, setF] = useState({ host: 'smtp.gmail.com', port: 465, user: '', pass: '', fromName: '' });
@@ -521,9 +521,14 @@ function EmailTab() {
   }
   async function test() {
     setBusy(true);
-    try { const r = await api<{ to: string }>('/api/email-config/test', { body: { to: testTo }, timeout: 40000 }); toast(`Tes Email terkirim ke ${r.to}`); }
-    catch (e) { toast((e as Error).message, 'err'); } finally { setBusy(false); }
+    try {
+      // uji memakai isian yang sedang tampil, jadi Pass Email Toko yang baru diketik ikut diuji walau belum disimpan
+      const r = await api<{ to: string; via: 'manual' | 'owner' | 'toko' }>('/api/email-config/test', { body: { to: testTo, host: f.host, port: f.port, user: f.user, pass: f.pass, fromName: f.fromName }, timeout: 40000 });
+      toast(`Tes Email terkirim ke ${r.to}${r.via === 'toko' ? ' (Akun GMAIL Toko sendiri, karena akun owner belum punya email)' : ''}.${f.pass ? ' Tekan Simpan agar Pass Email Toko ini dipakai.' : ''}`);
+    } catch (e) { toast((e as Error).message, 'err'); } finally { setBusy(false); }
   }
+  const gmail = /gmail\.com$|googlemail\.com$/i.test(f.host.trim());
+  const letters = f.pass.replace(/[^A-Za-z]/g, '').length;
   if (!cfg) return null;
   return (
     <div className="two">
@@ -531,7 +536,9 @@ function EmailTab() {
         <h3>Email Reset</h3>
         <div className="row"><span>Status</span><b className={cfg.configured ? 'ok' : 'red'}>{cfg.configured ? 'Aktif' : 'Belum diatur'}</b></div>
         <Field label="Akun GMAIL Toko"><input type="email" value={f.user} onChange={(e) => setF({ ...f, user: e.target.value.trim() })} autoCapitalize="none" placeholder="tokoanda@gmail.com" /></Field>
-        <Field label="Pass Email Toko"  hint={cfg.hasPassword ? 'Sudah tersimpan. Kosongkan bila tidak diganti.' : undefined}>
+        <Field label="Pass Email Toko" hint={f.pass
+          ? (gmail ? <span className={letters === 16 ? 'ok' : 'red'} data-testid="pass-hitung">{letters}/16 huruf App Password{letters === 16 ? '' : ' (sandi Gmail biasa akan ditolak Google)'}</span> : undefined)
+          : cfg.hasPassword ? <span className={gmail && cfg.passLen !== 16 ? 'red' : ''}>Sudah tersimpan ({cfg.passLen} karakter){gmail && cfg.passLen !== 16 ? ': bukan App Password 16 huruf, ketik ulang lalu Simpan.' : '. Kosongkan bila tidak diganti.'}</span> : undefined}>
           <input type="password" value={f.pass} onChange={(e) => setF({ ...f, pass: e.target.value })} autoComplete="new-password" placeholder="xxxx xxxx xxxx xxxx" />
         </Field>
         <Field label="Nama pengirim"><input value={f.fromName} onChange={(e) => setF({ ...f, fromName: e.target.value })} placeholder="Buket Stabat" /></Field>
@@ -541,8 +548,8 @@ function EmailTab() {
         </div>
         <button className="btn primary" disabled={busy || !f.user || !f.host || (!f.pass && !cfg.hasPassword)} onClick={saveCfg}>Simpan</button>
         <h3>Tes Email</h3>
-        <Field label="Kirim ke" hint="Kosongkan untuk mengirim ke email akun owner"><input type="email" value={testTo} onChange={(e) => setTestTo(e.target.value)} autoCapitalize="none" /></Field>
-        <button className="btn" disabled={busy || !cfg.configured} onClick={test}>{busy ? 'Memproses…' : 'Tes Email'}</button>
+        <Field label="Kirim ke" hint="Kosongkan untuk mengirim ke email akun owner. Bila owner belum punya email, dikirim ke Akun GMAIL Toko sendiri."><input type="email" value={testTo} onChange={(e) => setTestTo(e.target.value)} autoCapitalize="none" /></Field>
+        <button className="btn" disabled={busy || !f.user || !f.host || (!f.pass && !cfg.hasPassword)} onClick={test} data-testid="tes-email">{busy ? 'Memproses…' : 'Tes Email'}</button>
       </section>
       <section className="card">
         <h3>Cara membuat App password Gmail</h3>

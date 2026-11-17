@@ -10,7 +10,7 @@ import { DueAlert, usePendingCancels } from './components/Alerts';
 import Kalender from './pages/Kalender';
 import Setup from './pages/Setup';
 import Kasir from './pages/Kasir';
-import Pesanan from './pages/Pesanan';
+import Riwayat from './pages/Pesanan';
 import Produksi from './pages/Produksi';
 import Produk from './pages/Produk';
 import Pelanggan from './pages/Pelanggan';
@@ -24,8 +24,8 @@ export { ROLE_LABEL };
 
 const PAGES: { key: string; label: string; roles: Role[]; el: () => ReactElement }[] = [
   { key: 'kasir', label: 'Kasir', roles: ['owner', 'kasir'], el: () => <Kasir /> },
-  { key: 'pesanan', label: 'Pesanan', roles: ['owner', 'kasir'], el: () => <Pesanan /> },
   { key: 'produksi', label: 'Produksi', roles: ['owner', 'kasir', 'perangkai'], el: () => <Produksi /> },
+  { key: 'riwayat', label: 'Riwayat', roles: ['owner', 'kasir'], el: () => <Riwayat /> },
   { key: 'pelanggan', label: 'Pelanggan', roles: ['owner', 'kasir'], el: () => <Pelanggan /> },
   { key: 'produk', label: 'Produk', roles: ['owner'], el: () => <Produk /> },
   { key: 'shift', label: 'Shift', roles: ['owner', 'kasir'], el: () => <ShiftPage /> },
@@ -34,13 +34,18 @@ const PAGES: { key: string; label: string; roles: Role[]; el: () => ReactElement
   { key: 'pengaturan', label: 'Pengaturan', roles: ['owner', 'kasir', 'perangkai'], el: () => <Pengaturan /> },
 ];
 
-function useHash() {
-  // v1.6: menu Belanja bahan pindah ke Laporan › Perhitungan HPP (tautan lama tetap berlaku)
+// tautan lama tetap berlaku: v1.6 Belanja bahan → Laporan › Perhitungan HPP; v1.7 Pesanan → Riwayat
+function legacyHash() {
   if (/^#\/?belanja/.test(location.hash)) history.replaceState(null, '', '#/laporan?v=hpp&s=belanja');
+  if (/^#\/?pesanan/.test(location.hash)) history.replaceState(null, '', location.hash.replace(/^#\/?pesanan/, '#/riwayat'));
+}
+
+function useHash() {
+  legacyHash();
   const [h, setH] = useState(() => location.hash.replace(/^#\/?/, ''));
   useEffect(() => {
     const f = () => {
-      if (/^#\/?belanja/.test(location.hash)) history.replaceState(null, '', '#/laporan?v=hpp&s=belanja');
+      legacyHash();
       setH(location.hash.replace(/^#\/?/, ''));
     };
     window.addEventListener('hashchange', f);
@@ -71,7 +76,7 @@ function SyncBadge() {
   else if (st.syncing || st.pending) { cls = 'busy'; text = st.pending ? `Menyinkron · ${st.pending}` : 'Menyinkron…'; }
   const ago = st.lastSync ? Math.round((Date.now() - st.lastSync) / 1000) : null;
   return (
-    <button className={`sync ${cls}`} title={ago !== null ? `Sinkron terakhir ${ago} detik lalu` : 'Belum sinkron'} onClick={() => sync.run()} data-testid="sync-badge">
+    <button className={`sync ${cls}`} title={st.error && cls !== 'ok' ? st.error : ago !== null ? `Sinkron terakhir ${ago} detik lalu` : 'Belum sinkron'} onClick={() => sync.run()} data-testid="sync-badge">
       <i /><span className="hide-sm">{text}</span>
     </button>
   );
@@ -137,7 +142,7 @@ function Shell() {
         <div className="brand"><span className="brand-mark"><Icon name="flower" /></span><span>{store?.store_name || 'Kasir Buket'}</span></div>
         {allowed.map((p) => (
           <a key={p.key} href={`#/${p.key}`} className={p === page ? 'on' : ''}><Icon name={p.key} /><span>{p.label}</span>
-            {p.key === 'pesanan' && role === 'owner' && pendingCancels > 0 && <em className="navbadge" title="Pengajuan pembatalan menunggu persetujuan">{pendingCancels}</em>}</a>
+            {p.key === 'produksi' && role === 'owner' && pendingCancels > 0 && <em className="navbadge" title="Pengajuan pembatalan menunggu persetujuan">{pendingCancels}</em>}</a>
         ))}
       </nav>
       <div className={`main ${page.key === 'kasir' || page.key === 'produksi' ? 'wide' : ''}`}>

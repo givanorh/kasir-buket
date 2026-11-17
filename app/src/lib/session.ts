@@ -3,6 +3,7 @@ import { useSyncExternalStore } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { db, getMeta, resetLocalData, setMeta } from './db';
 import type { Role } from './types';
+import { proxyMessage } from './rules';
 import { FN_LABEL, KIND_LABEL, type DeviceFn, type DeviceKind } from './device';
 
 export interface SessionUser { id: string; name: string; username: string; role: Role; outlet_id?: string }
@@ -53,8 +54,10 @@ export function randomId(len = 10) {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) { super(message); }
+  /** `proxy`: balasan bukan dari server Kasir Buket (mis. ngrok/Cloudflare saat tunnel mati), diperlakukan seperti offline. */
+  constructor(public status: number, message: string, public proxy = false) { super(message); }
 }
+
 
 /** Panggil API server. Melempar ApiError (status 0 = jaringan/server tidak terjangkau). */
 export async function api<T = any>(path: string, opts: { method?: string; body?: unknown; timeout?: number } = {}): Promise<T> {
@@ -66,7 +69,8 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
   try {
     res = await fetch(base + path, {
       method: opts.method || (opts.body ? 'POST' : 'GET'),
-      headers: { 'Content-Type': 'application/json', ...(session.token ? { Authorization: `Bearer ${session.token}` } : {}) },
+      // header ngrok: lewati halaman peringatan tunnel gratis (tidak berpengaruh tanpa ngrok)
+      headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1', ...(session.token ? { Authorization: `Bearer ${session.token}` } : {}) },
       body: opts.body ? JSON.stringify(opts.body) : undefined,
       signal: ctrl.signal,
     });
@@ -75,9 +79,14 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
   } finally {
     clearTimeout(t);
   }
+  const text = await res.text().catch(() => '');
   let data: any = null;
-  try { data = await res.json(); } catch { /* bukan JSON */ }
-  if (!res.ok) throw new ApiError(res.status, data?.error || `Galat ${res.status}`);
+  try { data = text ? JSON.parse(text) : null; } catch { /* bukan JSON: balasan perantara */ }
+  if (!res.ok) {
+    if (data?.error) throw new ApiError(res.status, data.error);
+    throw new ApiError(res.status, proxyMessage(res.status, res.headers.get('ngrok-error-code'), text.slice(0, 4000)), true);
+  }
+  if (data === null && text) throw new ApiError(res.status, proxyMessage(res.status, res.headers.get('ngrok-error-code'), text.slice(0, 4000)), true);
   return data as T;
 }
 

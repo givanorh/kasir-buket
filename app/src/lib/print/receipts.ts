@@ -53,7 +53,10 @@ export function buildStruk(order: Order, payments: Payment[], st: Settings | und
   L.push({ t: 'hr' });
 
   // pembayaran
-  for (const p of pays) L.push({ t: 'kv', label: `${p.kind === 'dp' ? 'DP ' : p.kind === 'pelunasan' ? 'PELUNASAN ' : ''}${p.method.toUpperCase()}`, value: num(p.amount) });
+  for (const p of pays) {
+    L.push({ t: 'kv', label: `${p.kind === 'dp' ? 'DP ' : p.kind === 'pelunasan' ? 'PELUNASAN ' : ''}${p.method.toUpperCase()}`, value: num(p.amount) });
+    if (p.kind !== 'lunas') L.push({ t: 'text', text: `  TGL ${stamp(p.created_at)}` }); // tanggal DP & pelunasan
+  }
   if (order.cash_received && order.cash_received > paid && order.change) {
     L.push({ t: 'kv', label: 'UANG DITERIMA', value: num(order.cash_received) });
     L.push({ t: 'kv', label: 'KEMBALI', value: num(order.change) });

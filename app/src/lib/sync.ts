@@ -102,7 +102,8 @@ class SyncEngine {
         this.stop();
         await logout();
       } else {
-        this.set({ online: err.status !== 0 ? this.status.online : false, error: err.message, pending: await db.outbox.count() });
+        // tunnel/perantara mati (mis. ngrok ERR_NGROK_3200) = server tidak terjangkau, tampilkan sebagai offline
+        this.set({ online: err.status !== 0 && !err.proxy ? this.status.online : false, error: err.message, pending: await db.outbox.count() });
         if (this.retryTimer) clearTimeout(this.retryTimer);
         this.retryTimer = setTimeout(() => this.run(), this.backoff);
         this.backoff = Math.min(this.backoff * 2, 30000);

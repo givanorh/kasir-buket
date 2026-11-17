@@ -8,18 +8,18 @@ Aplikasi kasir (POS) khusus usaha buket milik Vano (Stabat, Langkat). Satu kode 
 ## Perintah
 ```bash
 # server (tanpa dependensi npm; Node >= 22.13 karena node:sqlite)
-cd server && npm test                      # 33 uji (integrasi, notifikasi/kalender, rute, geo, pembatalan, lihat sandi, kalender owner)
+cd server && npm test                      # 35 uji (integrasi, notifikasi/kalender, rute, geo, pembatalan, lihat sandi, kalender owner, CORS ngrok)
 node server/src/index.js                   # http://localhost:8080 (env: PORT, HOST, DATA_DIR, STATIC_DIR, TOKEN_DAYS, SECRET, ORS_URL, OSRM_URL, NOTIFY_DELAY_MS, NOTIFY_INTERVAL_MS)
 
 # aplikasi
 cd app && npm ci
-npm test                                   # 30 uji logika (tsx + node:test; fixture test/fixtures/belanja.xlsx)
+npm test                                   # 33 uji logika (tsx + node:test; fixture test/fixtures/belanja.xlsx)
 npm run build                              # tsc --noEmit && vite build -> app/dist
 npm run dev                                # vite, proxy /api ke :8080
 npx cap sync android                       # salin dist ke proyek Android
 
 # end-to-end 2 perangkat (Playwright + Chromium, butuh app/dist; ORS & SMTP tiruan lokal)
-node e2e/e2e.mjs                           # 79 pemeriksaan
+node e2e/e2e.mjs                           # 87 pemeriksaan
 ```
 Selalu jalankan `server: npm test`, `app: npm test && npm run build`, dan `node e2e/e2e.mjs` sebelum menyatakan pekerjaan selesai.
 
@@ -28,7 +28,8 @@ Selalu jalankan `server: npm test`, `app: npm test && npm run build`, dan `node 
 - `app/src/lib/` — `types.ts` (model data), `db.ts` (Dexie/IndexedDB), `sync.ts` (mesin sinkron), `store.ts` (operasi domain: checkout, pembayaran, void, nomor transaksi, konfigurasi perangkat), `calc.ts` (rumus murni: total, laporan, shift, kapasitas), `kasirpintar.ts` (impor), `print/` (`escpos.ts` encoder, `receipts.ts` isi struk/tiket, `index.ts` transport + stasiun cetak).
 - `app/src/lib/device.ts` (kode perangkat jenis+fungsi), `settings.ts` (bawaan + bank 20 pertanyaan survei, `pickSurvey`, `surveyBank`), `labels.ts`, `events.ts` (32 event bawaan 2026 + analisis omzet: `dailySales`, `baselineAround`, `eventStat`, `spikeDays`), `sheet.ts` (CSV & .xlsx tanpa dependensi, angka/tanggal gaya Indonesia), `purchases.ts` (pemetaan baris belanja, ID deterministik), `review.ts` (kolom diskon ulasan, budget bulanan, saran budget), `costs.ts` (gaji, THR, biaya operasional, alokasi periode, HPP penuh, titik impas), `events.ts` juga memuat proyeksi event rutin (`occurrences`, `suggestRecurring`, `KNOWN_DAYS`).
 - `app/src/components/Alerts.tsx` — peringatan H-1 (`DueAlert`) dan daftar pengajuan pembatalan (`CancelRequests`).
-- `app/src/pages/` — Kasir, Pesanan, Produksi, Produk, Pelanggan, Shift, Laporan (tab Laba rugi, Perhitungan HPP = `Hpp.tsx` berisi Ringkasan/Belanja bahan (`Belanja.tsx`)/Gaji & biaya, Analisis), Kalender (owner), Pengaturan (tab Perangkat, Printer, Toko & cabang, Promo poin & ongkir, Perangkai, Survei, Pengguna, Reset Password, Impor), Setup. Tautan lama `#/belanja` dialihkan ke `#/laporan?v=hpp&s=belanja`.
+- `app/src/components/Order.tsx` — label status (`prodBadge`, `payBadge`), `OrderDetail` operasional (dibuka dari Produksi: perangkai, status per peran, pelunasan, cetak, pembatalan) dan `PelunasanModal`. `app/src/lib/rules.ts` — aturan murni `canSetStatus` (wewenang status per peran) dan `proxyMessage` (galat ngrok/Cloudflare).
+- `app/src/pages/` — Kasir, Produksi, Riwayat (berkas `Pesanan.tsx`, hanya catatan: invoice + status, tanpa aksi selain cetak ulang), Produk, Pelanggan, Shift, Laporan (tab Laba rugi, Perhitungan HPP = `Hpp.tsx` berisi Ringkasan/Belanja bahan (`Belanja.tsx`)/Gaji & biaya, Analisis), Kalender (owner), Pengaturan (tab Perangkat, Printer, Toko & cabang, Promo poin & ongkir, Perangkai, Survei, Pengguna, Reset Password, Impor), Setup. Tautan lama `#/belanja` dialihkan ke `#/laporan?v=hpp&s=belanja`, `#/pesanan` ke `#/riwayat`.
 - `app/android/app/src/main/java/id/kasirbuket/app/ThermalPrinterPlugin.java` — plugin native: `listPaired`, `printBluetooth` (SPP), `printTcp` (port 9100).
 - `tools/ekspor-kasirpintar.js` — skrip Console untuk ekspor data dari back office Kasir Pintar.
 - `.github/workflows/android.yml` — build APK debug (kunci tetap `app/android/app/debug.keystore`).
@@ -64,6 +65,9 @@ Selalu jalankan `server: npm test`, `app: npm test && npm run build`, dan `node 
 28. **Alokasi biaya** (`allocCosts`): per bulan kalender proporsional hari; tahunan ÷ 12 (akrual); "sekali" pada tanggalnya; persen × penjualan bersih; kelompok `kas` (uang standby) bukan beban. Laba bersih = laba kotor − (kas keluar biaya + gaji + THR/bonus + biaya operasional).
 29. **Kalender owner → Google Calendar**: konfigurasi di kv `calsync` (tidak ikut sinkron), bawaan nonaktif. Penerima = email akun owner + email tambahan. Keadaan per (event, email) di `cal_events` dengan kunci `ev-<id>`; antrean `notify_jobs` sama dengan notifikasi perangkai. Event lampau (bukan rutin) tidak diubah. Pengingat H-7/H-3 08.00 WIB tercatat di `ev_reminders`, dikirim bila jatuh tempo ≤ 24 jam.
 30. **Lihat sandi**: `users.pw_view` = AES-256-GCM (kunci SHA-256 dari secret server) hanya untuk sandi yang diatur owner; reset lewat email atau CLI mengosongkannya.
+31. **Wewenang status produksi** (`canSetStatus`, ditegakkan di UI): antri→dirangkai→siap = perangkai/owner; siap→selesai = kasir/owner dan hanya bila sisa tagihan 0. Kartu Siap yang masih bersisa menampilkan "Bayar pelunasan" (kasir/owner) sebagai pengganti "Sudah diambil". Tombol di luar wewenang tampil abu-abu (disabled), bukan disembunyikan.
+32. **Pelunasan**: hanya lewat `PelunasanModal` (`addPayment`, jenis `pelunasan`, dibatasi sisa). Bila sisa menjadi 0, cetak `printOrder(order, ['kasir'], { copyLabel: 'STRUK PELUNASAN' })`. Struk mencetak `TGL` untuk setiap pembayaran DP/pelunasan. Riwayat tidak boleh memuat aksi pembayaran/status/pembatalan.
+33. **Galat perantara**: `api()` membaca teks lalu `JSON.parse`; jawaban bukan JSON (halaman ngrok/Cloudflare) menjadi `ApiError(..., proxy = true)` dengan pesan `proxyMessage`, dan mesin sinkron menganggapnya offline. Semua galat API server wajib JSON `{error}`. CORS mengizinkan header `ngrok-skip-browser-warning` yang dikirim setiap permintaan.
 
 ## Batasan lingkungan
 - Android SDK/Gradle tidak tersedia di container (dl.google.com, maven.google.com diblokir). APK dibangun oleh GitHub Actions atau Android Studio di PC pengguna. Perubahan Java cukup dicek dengan `javac` terhadap stub API.
@@ -77,7 +81,7 @@ Selalu jalankan `server: npm test`, `app: npm test && npm run build`, dan `node 
 - Gaya komunikasi dengan Vano: lugas, teknis/matematis, singkatan diberi kepanjangan di awal, istilah dijelaskan di akhir, tampilkan langkah hitung dan rekonsiliasi, hindari penghubung " —".
 
 ## Status & backlog
-Versi 1.6 selesai dan seluruh uji lulus (v1.6: Perhitungan HPP + gaji & biaya, kalender kategori & urut omzet, sinkron Google Calendar owner, lihat sandi, tab Reset Password; v1.5: checkout nomor HP dulu, gerbang shift, event rutin, diskon ulasan dengan budget & kolom, animasi & pola; v1.3: notifikasi & kalender perangkai, ORS, bank survei, kode perangkat, tata letak; v1.4: tombol −/+ di kartu, member, persetujuan pembatalan, peringatan H-1, kalender event & analisis omzet, belanja bahan + unggah CSV/Excel, dasar HPP). Belum teruji dengan layanan sungguhan dari container: Gmail/Google Calendar, OpenRouteService, link pendek Google Maps. Kandidat berikutnya (belum dikerjakan):
+Versi 1.7 selesai dan seluruh uji lulus (v1.7: menu Riwayat hanya catatan di bawah Produksi, tombol Bayar pelunasan + struk pelunasan, wewenang tombol status per peran, pesan galat ngrok; v1.6: Perhitungan HPP + gaji & biaya, kalender kategori & urut omzet, sinkron Google Calendar owner, lihat sandi, tab Reset Password; v1.5: checkout nomor HP dulu, gerbang shift, event rutin, diskon ulasan dengan budget & kolom, animasi & pola; v1.3: notifikasi & kalender perangkai, ORS, bank survei, kode perangkat, tata letak; v1.4: tombol −/+ di kartu, member, persetujuan pembatalan, peringatan H-1, kalender event & analisis omzet, belanja bahan + unggah CSV/Excel, dasar HPP). Belum teruji dengan layanan sungguhan dari container: Gmail/Google Calendar, OpenRouteService, link pendek Google Maps. Kandidat berikutnya (belum dikerjakan):
 1. Resep bahan baku (BOM) per buket untuk memotong stok bahan otomatis.
 2. Struk digital via WhatsApp.
 3. QRIS dinamis via payment gateway.

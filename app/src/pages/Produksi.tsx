@@ -1,28 +1,41 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../lib/db';
-import { addDays, dayKey, fmtDate, fmtTime } from '../lib/format';
+import { addDays, dayKey, fmtDate, fmtShort, fmtTime, rp } from '../lib/format';
 import { getDeviceConfig, setProductionStatus, type DeviceConfig } from '../lib/store';
 import { retryJob } from '../lib/print';
-import { Empty, Seg } from '../components/ui';
+import { Badge, Empty, Seg } from '../components/ui';
 import { storeCfg } from '../lib/settings';
 import { Icon } from '../components/icons';
-import { OrderDetail } from './Pesanan';
+import { OrderDetail, PelunasanModal } from '../components/Order';
+import { canSetStatus } from '../lib/rules';
 import { CancelRequests } from '../components/Alerts';
 import { useSession } from '../lib/session';
-import type { Order, ProductionStatus } from '../lib/types';
+import type { Order, Payment, ProductionStatus, Role } from '../lib/types';
 
-const COLS: { st: ProductionStatus; label: string; next?: ProductionStatus; action?: string }[] = [
+const COLS: { st: ProductionStatus; label: string; next: ProductionStatus; action: string }[] = [
   { st: 'antri', label: 'Antri', next: 'dirangkai', action: 'Mulai rangkai' },
   { st: 'dirangkai', label: 'Dirangkai', next: 'siap', action: 'Selesai dirangkai' },
   { st: 'siap', label: 'Siap diambil/antar', next: 'selesai', action: 'Sudah diambil' },
 ];
 
-/** Papan ruang perangkai: urut jadwal, terlambat ditandai merah, ketuk untuk memajukan status. */
+const sumPaid = (ps: Payment[]) => {
+  const m = new Map<string, number>();
+  for (const p of ps) if (!p.void) m.set(p.order_id, (m.get(p.order_id) || 0) + p.amount);
+  return m;
+};
+
+/**
+ * Papan ruang perangkai: urut jadwal, terlambat ditandai merah.
+ * Antri → Dirangkai → Siap dikonfirmasi perangkai; Siap → Selesai (sudah diambil) dikonfirmasi kasir setelah lunas.
+ */
 export default function Produksi() {
   const [when, setWhen] = useState<'aktif' | 'hari' | 'besok'>(() => (location.hash.includes('?besok') ? 'besok' : 'aktif'));
-  const isOwner = useSession().user?.role === 'owner';
+  const role = useSession().user?.role;
+  const isOwner = role === 'owner';
+  const money = role !== 'perangkai';
   const [open, setOpen] = useState<string | null>(null);
+  const [payFor, setPayFor] = useState<string | null>(null);
   const [flor, setFlor] = useState('');
   const settings = useLiveQuery(() => db.settings.get('toko'));
   const florists = storeCfg(settings).florists;
@@ -35,9 +48,25 @@ export default function Produksi() {
     const t = setInterval(() => tick((x) => x + 1), 60000);
     return () => { window.removeEventListener('device-config', load); clearInterval(t); };
   }, []);
-  const orders = useLiveQuery(() => db.orders.where('production_status').anyOf('antri', 'dirangkai', 'siap').toArray(), []) || [];
+  const board = useLiveQuery(async () => {
+    const os = await db.orders.where('production_status').anyOf('antri', 'dirangkai', 'siap').toArray();
+    const ps = await db.payments.where('order_id').anyOf(os.map((o) => o.id)).toArray();
+    return { os, paid: sumPaid(ps) };
+  }, []);
+  // pesanan yang sudah diambil tetapi masih bersisa tagihan (data lama atau bayar nanti): tetap bisa dilunasi di sini
+  const unpaidDone = useLiveQuery(async () => {
+    if (!money) return [];
+    const os = (await db.orders.where('production_status').equals('selesai').toArray()).filter((o) => !o.void && !o.deleted);
+    if (!os.length) return [];
+    const paid = sumPaid(await db.payments.where('order_id').anyOf(os.map((o) => o.id)).toArray());
+    return os.map((o) => ({ o, due: Math.max(0, o.total - (paid.get(o.id) || 0)) })).filter((x) => x.due > 0)
+      .sort((a, b) => (a.o.done_at || '').localeCompare(b.o.done_at || ''));
+  }, [money]) || [];
   const jobs = useLiveQuery(() => db.print_jobs.where('status').anyOf('pending', 'printing', 'error').toArray(), []) || [];
+  const sel = useLiveQuery(() => (open ? db.orders.get(open) : undefined), [open]);
+  const payOrder = useLiveQuery(() => (payFor ? db.orders.get(payFor) : undefined), [payFor]);
 
+  const orders = board?.os || [];
   const list = useMemo(() => {
     const today = dayKey(new Date());
     const tomorrow = dayKey(addDays(new Date(), 1));
@@ -49,7 +78,7 @@ export default function Produksi() {
   }, [orders, when, flor]);
   const station = cfg?.stationTargets || [];
   const myJobs = jobs.filter((j) => station.includes(j.target));
-  const sel = orders.find((o) => o.id === open);
+  const dueOf = (o: Order) => Math.max(0, o.total - (board?.paid.get(o.id) || 0));
 
   return (
     <div className="page">
@@ -74,22 +103,50 @@ export default function Produksi() {
           return (
             <div key={c.st} className="bcol">
               <div className="bhead">{c.label} <span>{xs.reduce((s, o) => s + o.items.reduce((a, i) => a + i.qty, 0), 0)} item</span></div>
-              {xs.map((o) => <Card key={o.id} o={o} next={c.next} action={c.action} onOpen={() => setOpen(o.id)} />)}
+              {xs.map((o) => <Card key={o.id} o={o} col={c} role={role} due={board ? dueOf(o) : null} onOpen={() => setOpen(o.id)} onPay={() => setPayFor(o.id)} />)}
               {!xs.length && <Empty>—</Empty>}
             </div>
           );
         })}
       </div>
+      {unpaidDone.length > 0 && (
+        <div className="stack" data-testid="unpaid-done">
+          <h3 className="section-h">Sudah diambil, belum lunas</h3>
+          <div className="table" style={{ ['--cols' as string]: '150px minmax(0,1fr) 140px 190px', ['--cols-sm' as string]: 'minmax(96px,auto) minmax(0,1fr) auto' }}>
+            {unpaidDone.map(({ o, due }) => (
+              <div key={o.id} className="trow">
+                <div><b>{o.no}</b><div className="muted">{fmtShort(o.done_at || o.created_at)}</div></div>
+                <div className="grow">{o.customer_name || 'Umum'}<div className="muted">{o.items.map((i) => `${i.qty}× ${i.name}`).join(', ')}</div></div>
+                <div className="right hide-sm">Sisa <b className="red">{rp(due)}</b></div>
+                <button className="btn primary small" onClick={() => setPayFor(o.id)}>Bayar pelunasan · {rp(due)}</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {sel && <OrderDetail order={sel} onClose={() => setOpen(null)} />}
+      {payOrder && <PelunasanModal order={payOrder} onClose={() => setPayFor(null)} />}
     </div>
   );
 }
 
-function Card({ o, next, action, onOpen }: { o: Order; next?: ProductionStatus; action?: string; onOpen: () => void }) {
-  const due = o.due_at ? new Date(o.due_at) : null;
-  const late = due && due.getTime() < Date.now() && o.production_status !== 'siap';
-  const soon = due && !late && due.getTime() - Date.now() < 2 * 3600e3;
-  const h1 = !!due && o.fulfillment !== 'sekarang' && dayKey(due) === dayKey(addDays(new Date(), 1)) && (o.production_status === 'antri' || o.production_status === 'dirangkai');
+const ROLE_HINT: Record<string, string> = {
+  dirangkai: 'Dikonfirmasi perangkai',
+  siap: 'Dikonfirmasi perangkai',
+  selesai: 'Dikonfirmasi kasir setelah pesanan diambil/diantar',
+};
+
+function Card({ o, col, role, due, onOpen, onPay }: {
+  o: Order; col: (typeof COLS)[number]; role: Role | undefined; due: number | null; onOpen: () => void; onPay: () => void;
+}) {
+  const at = o.due_at ? new Date(o.due_at) : null;
+  const late = at && at.getTime() < Date.now() && o.production_status !== 'siap';
+  const soon = at && !late && at.getTime() - Date.now() < 2 * 3600e3;
+  const h1 = !!at && o.fulfillment !== 'sekarang' && dayKey(at) === dayKey(addDays(new Date(), 1)) && (o.production_status === 'antri' || o.production_status === 'dirangkai');
+  const money = role !== 'perangkai';
+  // Siap + masih ada sisa tagihan (DP / bayar nanti): kasir menagih pelunasan dulu, baru "Sudah diambil"
+  const needPay = money && col.st === 'siap' && due !== null && due > 0;
+  const allowed = due !== null && canSetStatus(role, o, col.next, due);
   return (
     <div className={`bcard ${late ? 'late' : soon ? 'soon' : h1 ? 'h1' : ''}`} data-testid="prod-card">
       {h1 && <div className="bc-flag">H-1: untuk besok, belum selesai</div>}
@@ -104,8 +161,11 @@ function Card({ o, next, action, onOpen }: { o: Order; next?: ProductionStatus; 
         {o.card_message && <div className="bc-note"><b>Kartu:</b> “{o.card_message}”</div>}
         <div className="muted">{o.customer_name || 'Umum'}</div>
         {o.florist && <div className="bc-who">Perangkai: {o.florist}</div>}
+        {money && due !== null && due > 0 && <div className="bc-pay"><Badge tone={due < o.total ? 'amber' : 'red'}>{due < o.total ? 'DP' : 'Belum bayar'}</Badge> sisa {rp(due)}</div>}
       </div>
-      {next && <button className="btn primary" onClick={() => setProductionStatus(o, next)}>{action}</button>}
+      {needPay
+        ? <button className="btn primary" onClick={onPay} data-testid="btn-bayar-pelunasan">Bayar pelunasan · {rp(due!)}</button>
+        : <button className="btn primary" disabled={!allowed} title={allowed ? undefined : ROLE_HINT[col.next]} onClick={() => setProductionStatus(o, col.next)} data-testid={`act-${col.st}`}>{col.action}</button>}
     </div>
   );
 }

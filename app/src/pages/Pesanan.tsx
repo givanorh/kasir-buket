@@ -1,26 +1,20 @@
+// Riwayat transaksi: catatan saja. Tidak ada pelunasan, ubah status, atau pembatalan di sini
+// (semua aksi operasional ada di Produksi). Detail hanya menampilkan invoice dan status transaksi.
 import { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../lib/db';
 import { paymentStatus } from '../lib/calc';
-import { addDays, endOfDay, fmtDateTime, fmtShort, rp, startOfDay } from '../lib/format';
-import { addPayment, decideCancel, requestCancel, setProductionStatus, voidOrder, withdrawCancel } from '../lib/store';
-import { CancelRequests } from '../components/Alerts';
-import { printOrder } from '../lib/print';
-import { useSession } from '../lib/session';
-import { Badge, Empty, Field, Modal, MoneyInput, Seg, toast } from '../components/ui';
+import { addDays, fmtDateTime, fmtShort, rp, startOfDay } from '../lib/format';
+import { docFor, printOrder } from '../lib/print';
+import { Badge, Empty, Modal, Seg, toast } from '../components/ui';
 import { Icon } from '../components/icons';
-import { storeCfg } from '../lib/settings';
-import { save } from '../lib/store';
-import type { Order, ProductionStatus } from '../lib/types';
-
-export const PROD_LABEL: Record<ProductionStatus, string> = { antri: 'Antri', dirangkai: 'Dirangkai', siap: 'Siap', selesai: 'Selesai', batal: 'Batal' };
-const PROD_TONE: Record<ProductionStatus, 'gray' | 'amber' | 'blue' | 'green' | 'red'> = { antri: 'gray', dirangkai: 'amber', siap: 'blue', selesai: 'green', batal: 'red' };
-export const prodBadge = (s: ProductionStatus) => <Badge tone={PROD_TONE[s]}>{PROD_LABEL[s]}</Badge>;
-export const payBadge = (st: 'lunas' | 'dp' | 'belum') => <Badge tone={st === 'lunas' ? 'green' : st === 'dp' ? 'amber' : 'red'}>{st === 'lunas' ? 'Lunas' : st === 'dp' ? 'DP' : 'Belum bayar'}</Badge>;
+import { ReceiptPreview } from '../components/ReceiptPreview';
+import { livePays, paidSum, payBadge, prodBadge } from '../components/Order';
+import type { Order } from '../lib/types';
 
 type Filter = 'hari' | 'jadwal' | 'piutang' | '30';
 
-export default function Pesanan() {
+export default function Riwayat() {
   const [filter, setFilter] = useState<Filter>('hari');
   const [q, setQ] = useState('');
   const [open, setOpen] = useState<string | null>(null);
@@ -45,10 +39,8 @@ export default function Pesanan() {
   }, [orders, filter, q, paid]);
   const sel = orders.find((o) => o.id === open);
 
-  const isOwner = useSession().user?.role === 'owner';
   return (
     <div className="page">
-      {isOwner && <CancelRequests onOpen={setOpen} />}
       <div className="toolbar">
         <Seg value={filter} onChange={setFilter} options={[{ value: 'hari', label: 'Hari ini' }, { value: 'jadwal', label: 'Jadwal' }, { value: 'piutang', label: 'Belum lunas' }, { value: '30', label: '30 hari' }]} />
         <input className="grow" placeholder="Cari no / nama / HP" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -70,142 +62,67 @@ export default function Pesanan() {
             </div>
           );
         })}
-        {!list.length && <Empty>Tidak ada pesanan.</Empty>}
+        {!list.length && <Empty>Tidak ada transaksi.</Empty>}
       </div>
-      {sel && <OrderDetail order={sel} onClose={() => setOpen(null)} />}
+      {sel && <RiwayatDetail order={sel} onClose={() => setOpen(null)} />}
     </div>
   );
 }
 
-const REASONS = ['Pelanggan membatalkan', 'Salah input', 'Bahan tidak tersedia', 'Pesanan dobel', 'Tidak bisa diantar'];
-
-function CancelModal({ mode, order, onClose, onSubmit }: { mode: 'void' | 'request'; order: Order; onClose: () => void; onSubmit: (reason: string) => Promise<void> }) {
-  const [reason, setReason] = useState('');
-  const [busy, setBusy] = useState(false);
-  return (
-    <Modal title={mode === 'request' ? `Ajukan pembatalan ${order.no}` : `Batalkan ${order.no}`} onClose={onClose}
-      footer={<button className="btn danger grow" disabled={busy || reason.trim().length < 3} data-testid="kirim-batal"
-        onClick={async () => { setBusy(true); try { await onSubmit(reason); } finally { setBusy(false); } }}>
-        {mode === 'request' ? 'Kirim pengajuan ke owner' : 'Batalkan transaksi'}</button>}>
-      <div className="stack">
-        <p className="muted">{mode === 'request' ? `Pesanan ini sudah lunas (${rp(order.total)}). Owner menerima pengajuan beserta alasan, lalu menyetujui atau menolak.` : 'Pesanan dan pembayarannya dibatalkan; stok produk dikembalikan.'}</p>
-        <div className="chips small">{REASONS.map((r) => <button key={r} className={reason === r ? 'on' : ''} onClick={() => setReason(r)}>{r}</button>)}</div>
-        <Field label="Alasan (wajib)"><textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} data-testid="alasan-batal" /></Field>
-      </div>
-    </Modal>
-  );
-}
-
-export function OrderDetail({ order, onClose }: { order: Order; onClose: () => void }) {
-  const s = useSession();
+/** Detail catatan transaksi: invoice + status. DP dan pelunasan tampil dengan nominal dan tanggalnya. */
+export function RiwayatDetail({ order, onClose }: { order: Order; onClose: () => void }) {
   const paymentsQ = useLiveQuery(() => db.payments.where('order_id').equals(order.id).toArray(), [order.id]);
-  const payments = paymentsQ || [];
-  const settings = useLiveQuery(() => db.settings.get('toko'));
-  const paid = payments.filter((p) => !p.void).reduce((a, p) => a + p.amount, 0);
+  const doc = useLiveQuery(() => docFor(order, 'struk'), [order]);
+  const pays = livePays(paymentsQ || []);
+  const paid = paidSum(pays);
   const due = Math.max(0, order.total - paid);
-  const [payAmt, setPayAmt] = useState(0);
-  const [method, setMethod] = useState('Tunai');
-  const canEdit = s.user?.role !== 'perangkai';
-
-  async function pay() {
-    const amt = await addPayment(order, method, payAmt || due);
-    if (amt) { toast(`Pembayaran ${rp(amt)} dicatat`); setPayAmt(0); }
-  }
-  const owner = s.user?.role === 'owner';
-  const lunas = order.total > 0 && paid >= order.total;
+  const st = paymentStatus(order.total, paid);
+  const dp = pays.filter((p) => p.kind === 'dp');
+  const lunasan = pays.filter((p) => p.kind === 'pelunasan');
+  const sekali = pays.filter((p) => p.kind === 'lunas');
   const cr = order.cancel_request;
-  const pending = cr?.status === 'pending';
-  const [cancelMode, setCancelMode] = useState<'void' | 'request' | null>(null);
-  async function submitCancel(reason: string) {
-    if (cancelMode === 'request') { await requestCancel(order, reason); toast('Pengajuan pembatalan dikirim ke owner'); }
-    else { await voidOrder(order, reason); toast('Transaksi dibatalkan'); }
-    setCancelMode(null);
-  }
-  async function decide(ok: boolean) {
-    const note = ok ? '' : window.prompt('Alasan menolak (opsional)') ?? null;
-    if (note === null) return;
-    await decideCancel(order, ok, note);
-    toast(ok ? 'Pesanan dibatalkan' : 'Pengajuan ditolak');
-  }
-  async function reprint(t: 'kasir' | 'produksi') {
-    const r = await printOrder(order, [t], { copyLabel: t === 'kasir' ? 'CETAK ULANG' : undefined });
+  async function reprint() {
+    const r = await printOrder(order, ['kasir'], { copyLabel: 'CETAK ULANG' });
     toast(r[0].ok ? (r[0].mode === 'relay' ? 'Dikirim ke stasiun cetak' : 'Dikirim ke printer') : `Gagal: ${r[0].error}`, r[0].ok ? 'ok' : 'err');
   }
+  const PayRows = ({ label, xs }: { label: string; xs: typeof pays }) => (
+    <>{xs.map((p, i) => (
+      <div key={p.id} className="kv" data-testid={`riw-${p.kind}`}>
+        <span>{label}{xs.length > 1 ? ` ${i + 1}` : ''} · {p.method}</span>
+        <b>{rp(p.amount)} · {fmtDateTime(p.created_at)}</b>
+      </div>
+    ))}</>
+  );
 
   return (
-    <Modal title={`Pesanan ${order.no}`} onClose={onClose} wide>
-      <div className="detail">
+    <Modal title={`Transaksi ${order.no}`} onClose={onClose} wide
+      footer={<button className="btn grow" onClick={reprint} data-testid="riw-cetak"><Icon name="print" size={16} /> Cetak ulang struk</button>}>
+      <div className="detail" data-testid="riwayat-detail">
         <div className="stack">
-          <div className="kv"><span>Dibuat</span><b>{fmtDateTime(order.created_at)} · {order.cashier_name}</b></div>
-          <div className="kv"><span>Pelanggan</span><b>{order.customer_name || 'Umum'} {order.customer_phone}</b></div>
-          <div className="kv"><span>Pengambilan</span><b>{order.fulfillment === 'sekarang' ? 'Ditunggu' : `${order.fulfillment === 'antar' ? 'Diantar' : 'Diambil'} ${fmtDateTime(order.due_at)}`}</b></div>
-          {order.fulfillment === 'antar' && <div className="kv"><span>Penerima</span><b>{order.recipient_name} {order.recipient_phone} · {order.delivery_address}</b></div>}
-          {order.delivery?.km ? <div className="kv"><span>Jarak antar</span><b>{(Math.ceil(order.delivery.km * 10) / 10).toLocaleString('id-ID')} km · ongkir {rp(order.extra_fee)}</b></div> : null}
-          {order.card_message && <div className="kv"><span>Kartu ucapan</span><b>“{order.card_message}”</b></div>}
-          {order.notes && <div className="kv"><span>Catatan</span><b>{order.notes}</b></div>}
-          <div className="kv"><span>Produksi</span><b>{prodBadge(order.production_status)}</b></div>
-          {order.void && <div className="note warn">Dibatalkan: {order.void_reason}</div>}
-          <div className="items">
-            {order.items.map((it, i) => (
-              <div key={i} className="row"><span>{it.qty}× {it.name}{it.note ? <i className="muted"> · {it.note}</i> : null}</span><span>{rp(it.qty * it.price - it.discount)}</span></div>
-            ))}
-            {order.order_discount > 0 && <div className="row"><span>Diskon</span><span>−{rp(order.order_discount)}</span></div>}
-            {order.extra_fee > 0 && <div className="row"><span>Ongkir/biaya</span><span>{rp(order.extra_fee)}</span></div>}
-            <div className="row total"><span>Total</span><span>{rp(order.total)}</span></div>
-          </div>
+          <h3>Invoice</h3>
+          {doc ? <ReceiptPreview doc={doc} width={58} testId="riw-invoice" /> : <p className="muted">Memuat…</p>}
         </div>
         <div className="stack">
-          <h3>Pembayaran</h3>
-          {payments.map((p) => (
-            <div key={p.id} className={`row ${p.void ? 'strike' : ''}`}><span>{fmtShort(p.created_at)} · {p.kind} · {p.method}</span><b>{rp(p.amount)}</b></div>
-          ))}
-          <div className="row"><span>Sisa tagihan</span><b className={due ? 'red' : ''} data-testid="sisa">{rp(due)}</b></div>
-          {canEdit && due > 0 && !order.void && (
-            <div className="stack box">
-              <div className="chips methods">{(settings?.payment_methods || ['Tunai']).map((m) => <button key={m} className={method === m ? 'on' : ''} onClick={() => setMethod(m)}>{m}</button>)}</div>
-              <Field label="Nominal pelunasan"><MoneyInput value={payAmt || due} onChange={setPayAmt} /></Field>
-              <button className="btn primary" onClick={pay} data-testid="btn-lunasi">Catat pembayaran</button>
-            </div>
-          )}
-          <h3>Perangkai</h3>
-          <div className="chips small">
-            {[...new Set([...storeCfg(settings).florists, ...(order.florist ? [order.florist] : [])])].map((n) => (
-              <button key={n} disabled={!canEdit || order.void} className={order.florist === n ? 'on' : ''} onClick={() => save<Order>('orders', order.id, { florist: order.florist === n ? '' : n })}>{n}</button>
-            ))}
-          </div>
-          <h3>Status produksi</h3>
-          <div className="chips">
-            {(['antri', 'dirangkai', 'siap', 'selesai'] as ProductionStatus[]).map((st) => (
-              <button key={st} disabled={order.void} className={order.production_status === st ? 'on' : ''} onClick={() => setProductionStatus(order, st)}>{PROD_LABEL[st]}</button>
-            ))}
-          </div>
-          <h3>Cetak</h3>
-          <div className="chips">
-            <button onClick={() => reprint('kasir')}>Struk</button>
-            <button onClick={() => reprint('produksi')}>Tiket produksi</button>
-          </div>
-          {pending && !order.void && (
-            <div className="note warn" data-testid="cancel-pending">
-              <b>Pengajuan pembatalan oleh {cr!.by_name}</b> ({fmtShort(cr!.at)}): “{cr!.reason}”
-              {owner ? (
-                <div className="btns" style={{ marginTop: 8 }}>
-                  <button className="btn small" onClick={() => decide(false)}>Tolak</button>
-                  <button className="btn small danger" onClick={() => decide(true)} data-testid="setujui-batal-detail">Setujui &amp; batalkan</button>
-                </div>
-              ) : <div className="btns" style={{ marginTop: 8 }}><span className="muted">Menunggu persetujuan owner.</span><button className="btn small ghost" onClick={() => withdrawCancel(order)}>Tarik pengajuan</button></div>}
-            </div>
-          )}
-          {cr?.status === 'rejected' && !order.void && <div className="note small">Pengajuan pembatalan ditolak {cr.decided_by_name}{cr.decision_note ? `: ${cr.decision_note}` : ''}.</div>}
-          {canEdit && !order.void && !pending && paymentsQ && (
-            owner || !lunas
-              ? <button className="btn danger" onClick={() => setCancelMode('void')} data-testid="btn-batal">Batalkan transaksi</button>
-              : <button className="btn danger" onClick={() => setCancelMode('request')} data-testid="btn-ajukan-batal">Ajukan pembatalan ke owner</button>
-          )}
-          {canEdit && !owner && lunas && !order.void && !pending && <p className="muted small">Pesanan sudah lunas: pembatalan butuh persetujuan owner.</p>}
+          <h3>Status transaksi</h3>
+          <div className="kv"><span>Pembayaran</span><b data-testid="riw-status">{order.void ? <Badge tone="red">Dibatalkan</Badge> : payBadge(st)}</b></div>
+          <div className="kv"><span>Produksi</span><b>{prodBadge(order.production_status)}</b></div>
+          <div className="kv"><span>Dibuat</span><b>{fmtDateTime(order.created_at)} · {order.cashier_name}</b></div>
+          {order.ready_at && <div className="kv"><span>Siap</span><b>{fmtDateTime(order.ready_at)}</b></div>}
+          {order.done_at && <div className="kv"><span>Diambil/diantar</span><b>{fmtDateTime(order.done_at)}</b></div>}
+          {order.void && <div className="note warn">Dibatalkan{order.void_at ? ` ${fmtDateTime(order.void_at)}` : ''}: {order.void_reason}</div>}
+          {!order.void && cr?.status === 'pending' && <div className="note warn small">Pengajuan pembatalan oleh {cr.by_name} menunggu persetujuan owner.</div>}
+
+          <h3>Rincian pembayaran</h3>
+          <div className="kv"><span>Total transaksi</span><b>{rp(order.total)}</b></div>
+          <PayRows label="Dibayar lunas" xs={sekali} />
+          <PayRows label="DP" xs={dp} />
+          <PayRows label="Pelunasan" xs={lunasan} />
+          {!pays.length && paymentsQ && <div className="kv"><span>Pembayaran</span><b>Belum ada</b></div>}
+          <div className="kv"><span>Total dibayar</span><b>{rp(paid)}</b></div>
+          {!order.void && <div className="kv"><span>Sisa tagihan</span><b className={due ? 'red' : 'ok'} data-testid="riw-sisa">{due ? rp(due) : 'Lunas'}</b></div>}
+          {!order.void && due > 0 && <p className="muted small">Pelunasan dilakukan kasir di menu Produksi (tombol Bayar pelunasan pada kartu pesanan).</p>}
         </div>
       </div>
-      {cancelMode && <CancelModal mode={cancelMode} order={order} onClose={() => setCancelMode(null)} onSubmit={submitCancel} />}
     </Modal>
   );
 }
-

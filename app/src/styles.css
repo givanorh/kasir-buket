@@ -112,7 +112,7 @@ a { color: var(--plum) }
   .side a:hover .ic { transform: translateY(-1px) scale(1.08) }
   .side a[href='#/pengaturan']:hover .ic { transform: rotate(60deg) }
   .side a[href='#/produksi']:hover .ic { transform: rotate(-14deg) scale(1.06) }
-  .side a[href='#/kalender']:hover .ic, .side a[href='#/pesanan']:hover .ic { transform: rotate(-8deg) scale(1.06) }
+  .side a[href='#/kalender']:hover .ic, .side a[href='#/riwayat']:hover .ic { transform: rotate(-8deg) scale(1.06) }
   .side a[href='#/kasir']:hover .ic, .side a[href='#/belanja']:hover .ic { transform: translateY(-2px) rotate(-6deg) }
 }
 @keyframes iconPop { 0% { transform: scale(.8) } 55% { transform: scale(1.14) } 100% { transform: scale(1) } }
@@ -380,6 +380,10 @@ button.trow:hover, .trow.click:hover { background: #faf9fa }
 .bc-item { font-size: 16px }
 .bc-note { font-size: 14px; background: var(--paper); border-radius: 8px; padding: 6px 9px }
 .bc-who { font-size: 12.5px; font-weight: 700; color: var(--plum) }
+.bc-pay { font-size: 13px; font-weight: 700; color: var(--ink-2); display: flex; align-items: center; gap: 6px; margin-top: 4px }
+/* v1.7: tombol status yang bukan wewenang akun ini tampil abu-abu */
+.bcard .btn.primary:disabled { background: #dddad8; border-color: #dddad8; color: #77716d; opacity: 1 }
+.chips button:disabled { opacity: .45; cursor: not-allowed }
 .bcard.h1 { border-left-color: var(--amber); background: #fffcf5 }
 .bc-flag { font-size: 12px; font-weight: 700; color: var(--amber); background: var(--amber-soft); border-radius: 6px; padding: 3px 8px; align-self: flex-start }
 .bc-flag.red { color: var(--red); background: var(--red-soft) }

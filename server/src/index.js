@@ -21,7 +21,7 @@ import { createNotifier } from './notify.js';
 import { createEventSync, KINDS as EV_KINDS } from './evsync.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const VERSION = '1.6.0';
+export const VERSION = '1.7.0';
 
 const ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
 const ROLES = ['owner', 'kasir', 'perangkai'];
@@ -207,7 +207,26 @@ export function createServer(opts = {}) {
   }
   function publicEmailConfig() {
     const c = emailConfig();
-    return c ? { host: c.host, port: c.port, user: c.user, from: c.from, fromName: c.fromName, hasPassword: !!c.pass, configured: !!(c.host && c.from) } : { configured: false };
+    return c ? { host: c.host, port: c.port, user: c.user, from: c.from, fromName: c.fromName, hasPassword: !!c.pass, passLen: String(c.pass || '').length, configured: !!(c.host && c.from) } : { configured: false };
+  }
+  const isGmail = (host) => /(^|\.)gmail\.com$|googlemail\.com$/i.test(String(host || '').trim());
+  /** App password Gmail = 16 huruf. Spasi/karakter tak terlihat hasil salin dibuang; selain 16 huruf ditolak dengan pesan jelas. */
+  function cleanPass(host, pass) {
+    const raw = String(pass || '');
+    if (!isGmail(host)) return raw.replace(/\s+/g, '');
+    const letters = raw.replace(/[^A-Za-z]/g, '');
+    if (letters.length !== 16) {
+      throw new HttpError(400, `Pass Email Toko untuk Gmail harus App Password 16 huruf (yang terisi ${letters.length} huruf). Sandi login Gmail biasa selalu ditolak Google; buat App Password di myaccount.google.com/apppasswords dari akun Gmail toko yang sama.`);
+    }
+    return letters;
+  }
+  /** Terjemahkan penolakan login Gmail (535 5.7.8 / 534 5.7.9) menjadi langkah perbaikan. */
+  function smtpHint(cfg, message) {
+    const m = String(message || '');
+    if (isGmail(cfg.host) && /\b53[45]\b/.test(m)) {
+      return `Google menolak login ${cfg.user}. Periksa: (1) Pass Email Toko adalah App Password 16 huruf, bukan sandi Gmail biasa; (2) App Password dibuat saat login sebagai ${cfg.user}, bukan akun lain; (3) Verifikasi 2 Langkah akun itu aktif; (4) App Password lama otomatis dicabut bila sandi Gmail diganti, jadi buat yang baru lalu Simpan. Pesan Google: ${m.replace(/^SMTP login \(periksa email & app password\) ditolak: /, '')}`;
+    }
+    return m;
   }
   function storeName() {
     const r = q.getRec.get('settings', 'toko');
@@ -386,14 +405,27 @@ export function createServer(opts = {}) {
     if (user.role !== 'owner') throw new HttpError(403, 'Khusus owner');
     if (method === 'GET') return publicEmailConfig();
     if (method === 'POST' && parts[2] === 'test') {
-      const cfg = emailConfig();
-      if (!cfg?.host) throw new HttpError(400, 'Simpan pengaturan email dulu');
-      const to = normEmail(body.to) || q.userById.get(user.id).email;
-      if (!to) throw new HttpError(400, 'Isi email tujuan uji atau email akun owner');
+      // uji memakai isian formulir yang sedang tampil (belum perlu disimpan), sisanya dari pengaturan tersimpan
+      const saved = emailConfig() || {};
+      const host = String(body.host || saved.host || '').trim();
+      const userName = String(body.user || saved.user || '').trim().toLowerCase();
+      const cfg = {
+        ...saved, host, port: Number(body.port || saved.port || 465), user: userName,
+        pass: body.pass ? cleanPass(host, body.pass) : saved.pass || '',
+        from: normEmail(body.user || saved.from || saved.user || '') || '', fromName: String(body.fromName || saved.fromName || storeName()).trim(),
+      };
+      if (!cfg.host || !cfg.from) throw new HttpError(400, 'Isi Akun GMAIL Toko dan Pass Email Toko dulu');
+      if (!cfg.pass) throw new HttpError(400, 'Pass Email Toko belum diisi');
+      // tujuan: isian "Kirim ke" → email owner yang sedang masuk → email owner lain → Akun GMAIL Toko sendiri
+      const me = q.userById.get(user.id);
+      const otherOwner = db.prepare("SELECT email FROM users WHERE role = 'owner' AND active = 1 AND email IS NOT NULL AND email != '' ORDER BY created_at").get();
+      const manual = normEmail(body.to);
+      const to = manual || me?.email || otherOwner?.email || cfg.from;
+      const via = manual ? 'manual' : me?.email || otherOwner?.email ? 'owner' : 'toko';
       try {
         await sendMailFn(cfg, { to, subject: `Uji email ${storeName()}`, text: 'Pengaturan email Kasir Buket berhasil. Reset kata sandi lewat email sudah aktif.\n' });
-      } catch (e) { throw new HttpError(502, `Gagal: ${e.message}`); }
-      return { ok: true, to };
+      } catch (e) { throw new HttpError(502, `Gagal: ${smtpHint(cfg, e.message)}`); }
+      return { ok: true, to, via };
     }
     if (method === 'POST' || method === 'PATCH') {
       const cur = emailConfig() || {};
@@ -402,7 +434,7 @@ export function createServer(opts = {}) {
         host,
         port: Number(body.port ?? cur.port ?? 465),
         user: String(body.user ?? cur.user ?? '').trim(),
-        pass: body.pass ? String(body.pass).replace(/\s+/g, '') : cur.pass || '',
+        pass: body.pass ? cleanPass(host, body.pass) : cur.pass || '',
         from: normEmail(body.from ?? cur.from ?? body.user ?? '') || '',
         fromName: String(body.fromName ?? cur.fromName ?? storeName()).trim(),
       };
@@ -676,7 +708,7 @@ export function createServer(opts = {}) {
 
   const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, ngrok-skip-browser-warning');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
     if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
     const url = new URL(req.url, 'http://x');

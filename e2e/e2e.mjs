@@ -171,6 +171,9 @@ try {
 
   // A melihat status produksi & status job cetak berubah tanpa tombol sinkron
   await A.goto(BASE + '/#/pesanan');
+  await A.waitForFunction(() => location.hash.startsWith('#/riwayat'));
+  const navTxt = (await A.locator('nav.side a').allTextContents()).map((t) => t.replace(/\d+$/, '').trim());
+  assert(navTxt.indexOf('Riwayat') === navTxt.indexOf('Produksi') + 1 && !navTxt.includes('Pesanan'), `menu "Pesanan" berganti nama "Riwayat" dan berada di bawah Produksi (${navTxt.join(' › ')}); tautan lama #/pesanan dialihkan`);
   await A.locator('.trow', { hasText: no1 }).getByText('Dirangkai').waitFor({ timeout: 15000 });
   assert(true, 'status "Dirangkai" dari HP perangkai tampil di tablet kasir (realtime)');
   const dueTxt = await A.getByTestId('due-alert').textContent();
@@ -200,12 +203,40 @@ try {
   await B.locator('[data-testid=prod-card]', { hasText: no2.split('-').pop() }).waitFor({ timeout: 40000 });
   assert(true, `setelah online, transaksi ${no2} sampai di HP perangkai otomatis dalam ${((Date.now() - t0) / 1000).toFixed(1)} dtk`);
 
-  // pelunasan
-  await A.goto(BASE + '/#/pesanan');
-  await A.locator('.trow', { hasText: no1 }).click();
+  // peran di papan Produksi: antri/dirangkai dikonfirmasi perangkai, "Sudah diambil" dikonfirmasi kasir
+  const cardA = (no) => A.locator('[data-testid=prod-card]', { hasText: no.split('-').pop() });
+  const cardB = (no) => B.locator('[data-testid=prod-card]', { hasText: no.split('-').pop() });
+  await A.goto(BASE + '/#/produksi');
+  await cardA(no1).getByTestId('act-dirangkai').waitFor();
+  await cardB(no1).getByTestId('act-dirangkai').click();
+  await cardB(no1).getByTestId('act-siap').waitFor({ timeout: 15000 });
+  assert(await cardB(no1).getByTestId('act-siap').isDisabled() && (await cardB(no1).getByTestId('btn-bayar-pelunasan').count()) === 0, 'perangkai: status Siap, tombol "Sudah diambil" abu-abu dan tanpa tombol bayar');
+  await cardB(no1).scrollIntoViewIfNeeded();
+  await B.screenshot({ path: path.join(SHOTS, '21-perangkai-siap-abu.png') });
+  // pelunasan: pesanan Siap + DP → tombol "Bayar pelunasan" (bukan "Sudah diambil")
+  await cardA(no1).getByTestId('btn-bayar-pelunasan').waitFor({ timeout: 15000 });
+  assert((await cardA(no1).getByTestId('act-siap').count()) === 0, 'kasir: pesanan Siap yang masih DP menampilkan "Bayar pelunasan", bukan "Sudah diambil"');
+  await cardA(no1).getByTestId('btn-bayar-pelunasan').click();
+  await A.getByTestId('pelunasan').waitFor();
+  await A.screenshot({ path: path.join(SHOTS, '19-pelunasan.png') });
+  const nLog = await A.evaluate(() => window.__KB_PRINTLOG__.length);
   await A.getByTestId('btn-lunasi').click();
-  await A.getByTestId('sisa').filter({ hasText: 'Rp 0' }).waitFor();
-  assert(true, 'pelunasan DP: sisa tagihan Rp 0');
+  await A.waitForFunction((n) => window.__KB_PRINTLOG__.length > n, nLog, { timeout: 10000 });
+  const strukL = await A.evaluate(() => window.__KB_PRINTLOG__[0].lines.join('\n'));
+  assert(/\*\* STRUK PELUNASAN \*\*/.test(strukL) && /DP QRIS/.test(strukL) && /PELUNASAN TUNAI/.test(strukL) && /\n\s*LUNAS\s*\n/.test(strukL) && !/SISA TAGIHAN/.test(strukL) && (strukL.match(/TGL \d{2}\.\d{2}\.\d{2}/g) || []).length === 2, 'pelunasan DP mencetak struk pelunasan: DP + pelunasan bertanggal, status LUNAS');
+  console.log(strukL);
+  await cardA(no1).getByTestId('act-siap').waitFor({ timeout: 10000 });
+  assert(!(await cardA(no1).getByTestId('act-siap').isDisabled()), 'setelah lunas, kasir dapat menekan "Sudah diambil"');
+  // Riwayat: hanya invoice + status; DP dan pelunasan lengkap dengan nominal & tanggal, tanpa jendela pelunasan
+  await A.goto(BASE + '/#/riwayat');
+  await A.locator('.trow', { hasText: no1 }).click();
+  await A.getByTestId('riwayat-detail').waitFor();
+  const riwDp = await A.getByTestId('riw-dp').textContent();
+  const riwPl = await A.getByTestId('riw-pelunasan').textContent();
+  const riwInv = await A.getByTestId('riw-invoice').textContent();
+  assert(/DP · QRIS/.test(riwDp) && /Rp/.test(riwDp) && /\d{2}:\d{2}/.test(riwDp) && /Pelunasan · Tunai/.test(riwPl) && /\d{2}:\d{2}/.test(riwPl) && /Lunas/.test(await A.getByTestId('riw-sisa').textContent()), `riwayat: nominal + tanggal DP (${riwDp.trim()}) dan pelunasan (${riwPl.trim()})`);
+  assert(/LUNAS/.test(riwInv) && /PELUNASAN TUNAI/.test(riwInv) && (await A.getByTestId('btn-lunasi').count()) === 0 && (await A.getByTestId('btn-batal').count()) === 0 && (await A.getByTestId('status-chips').count()) === 0, 'riwayat hanya catatan: invoice tampil, tanpa form pelunasan, ubah status, atau pembatalan');
+  await A.screenshot({ path: path.join(SHOTS, '20-riwayat-detail.png') });
   await A.keyboard.press('Escape');
 
   // laporan
@@ -312,7 +343,7 @@ try {
   assert(/1 transaksi · sisa Rp\s?10\.000/.test(await A.getByTestId('review-usage').textContent()), 'pemakaian budget bulan ini: Rp 10.000 (1 transaksi), sisa Rp 10.000');
   await A.getByTestId('review-card').screenshot({ path: path.join(SHOTS, '18-diskon-ulasan.png') });
   await A.screenshot({ path: path.join(SHOTS, '10-profil-pelanggan.png') });
-  await A.goto(BASE + '/#/pesanan');
+  await A.goto(BASE + '/#/riwayat');
   await A.getByTestId('reprint').first().click();
   await A.getByText(/dikirim ke printer/).first().waitFor();
   assert(true, 'cetak ulang struk langsung dari baris pesanan');
@@ -521,16 +552,21 @@ try {
     return { earned: o.points_earned, phone: o.customer_phone };
   }, noNm);
   assert(nm.earned === 0 && nm.phone === '081399990000', `pelanggan bukan member bertransaksi (${noNm}): poin 0, HP 081399990000 tercatat`);
-  await D.goto(BASE + '/#/pesanan');
-  await D.getByRole('radio', { name: '30 hari' }).click();
-  await D.locator('.trow', { hasText: no2 }).click();
+  await D.goto(BASE + '/#/produksi');
+  const cardD = D.locator('[data-testid=prod-card]', { hasText: no2.split('-').pop() });
+  await cardD.getByTestId('act-antri').waitFor({ timeout: 15000 });
+  assert(await cardD.getByTestId('act-antri').isDisabled(), 'akun kasir (Admin): tombol "Mulai rangkai" abu-abu');
+  await D.screenshot({ path: path.join(SHOTS, '22-kasir-antri-abu.png') });
+  await cardD.locator('.bc-top').click();
+  const chipsD = D.getByTestId('status-chips');
+  assert(await chipsD.getByRole('button', { name: 'Dirangkai' }).isDisabled() && await chipsD.getByRole('button', { name: 'Siap' }).isDisabled(), 'akun kasir: status Dirangkai/Siap di detail juga terkunci');
   assert((await D.getByTestId('btn-batal').count()) === 0, `Admin tidak bisa langsung membatalkan pesanan lunas ${no2}`);
   await D.getByTestId('btn-ajukan-batal').click();
   await D.getByTestId('alasan-batal').fill('Pelanggan salah pilih produk');
   await D.getByTestId('kirim-batal').click();
   await D.getByTestId('cancel-pending').waitFor();
   assert(true, 'Admin mengajukan pembatalan beserta alasan');
-  await A.goto(BASE + '/#/pesanan');
+  await A.goto(BASE + '/#/produksi');
   await A.getByTestId('cancel-requests').getByText('Pelanggan salah pilih produk').waitFor({ timeout: 15000 });
   await A.screenshot({ path: path.join(SHOTS, '16-persetujuan-batal.png') });
   await A.getByTestId('cancel-requests').getByTestId('setujui-batal').click();
@@ -553,9 +589,8 @@ try {
   assert(/BEGIN:VEVENT/.test(icsTxt) && /SUMMARY:Rangkai #KK001/.test(icsTxt) && !/Rp/.test(icsTxt), 'isi undangan: VEVENT "Rangkai #KK001", tanpa harga');
   await A.getByTestId('notif-row').filter({ hasText: 'Terkirim' }).first().waitFor({ timeout: 15000 });
   await A.screenshot({ path: path.join(SHOTS, '13-perangkai-notifikasi.png'), fullPage: true });
-  await A.goto(BASE + '/#/pesanan');
-  await A.getByRole('radio', { name: '30 hari' }).click();
-  await A.locator('.trow', { hasText: no1 }).click();
+  await A.goto(BASE + '/#/produksi');
+  await cardA(no1).locator('.bc-top').click();
   await A.getByTestId('btn-batal').click();
   await A.getByRole('button', { name: 'Pelanggan membatalkan' }).click();
   await A.getByTestId('kirim-batal').click();
