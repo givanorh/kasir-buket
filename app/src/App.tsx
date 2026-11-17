@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from './lib/db';
-import { loadSession, logout, useSession } from './lib/session';
+import { loadSession, useSession } from './lib/session';
 import { sync, useSyncStatus } from './lib/sync';
 import { startPrintStation, stopPrintStation } from './lib/print';
 import { Toasts, useThumb } from './components/ui';
 import { Icon } from './components/icons';
 import { DueAlert, usePendingCancels } from './components/Alerts';
+import { useLogout } from './components/Logout';
 import Kalender from './pages/Kalender';
 import Setup from './pages/Setup';
 import Kasir from './pages/Kasir';
@@ -25,7 +26,7 @@ export { ROLE_LABEL };
 const PAGES: { key: string; label: string; roles: Role[]; el: () => ReactElement }[] = [
   { key: 'kasir', label: 'Kasir', roles: ['owner', 'kasir'], el: () => <Kasir /> },
   { key: 'produksi', label: 'Produksi', roles: ['owner', 'kasir', 'perangkai'], el: () => <Produksi /> },
-  { key: 'riwayat', label: 'Riwayat', roles: ['owner', 'kasir'], el: () => <Riwayat /> },
+  { key: 'riwayat', label: 'Riwayat', roles: ['owner', 'kasir', 'perangkai'], el: () => <Riwayat /> },
   { key: 'pelanggan', label: 'Pelanggan', roles: ['owner', 'kasir'], el: () => <Pelanggan /> },
   { key: 'produk', label: 'Produk', roles: ['owner'], el: () => <Produk /> },
   { key: 'shift', label: 'Shift', roles: ['owner', 'kasir'], el: () => <ShiftPage /> },
@@ -96,7 +97,8 @@ function UserMenu() {
     return () => document.removeEventListener('mousedown', f);
   }, [open]);
   const u = s.user;
-  async function out() { setOpen(false); sync.stop(); await logout(); }
+  const [requestLogout, logoutModal] = useLogout();
+  async function out() { setOpen(false); await requestLogout(); }
   if (!u) return null; // sesaat setelah keluar, sebelum halaman masuk tampil
   return (
     <div style={{ position: 'relative' }} ref={ref}>
@@ -112,6 +114,7 @@ function UserMenu() {
           <button role="menuitem" className="danger" onClick={out}><Icon name="logout" />Keluar</button>
         </div>
       )}
+      {logoutModal}
     </div>
   );
 }

@@ -29,7 +29,14 @@ export interface Settings extends Base {
   loyalty?: Partial<LoyaltyCfg>;
   engagement?: Partial<EngageCfg>;
   hpp_method?: HppMethod; // dasar HPP di laba rugi
+  /** v1.9: modal kembalian di laci kasir saat buka shift (bawaan 1.000.000) */
+  drawer_float?: number;
+  /** v1.9: kas kecil di laci meja kamar. target = jumlah tetap (bawaan 500.000); anchors[outlet] = saldo hasil hitung owner */
+  petty?: { target?: number; anchors?: Record<string, PettyAnchor> };
 }
+
+/** Titik awal saldo kas kecil: saldo = opening + Σ masuk − Σ keluar (laci meja kamar) sejak `at`. */
+export interface PettyAnchor { opening: number; at: string; by?: string }
 
 /** produk = Σ qty × modal; belanja = Σ belanja bahan periode (metode periodik); gabungan = keduanya dijumlah. */
 export type HppMethod = 'produk' | 'belanja' | 'gabungan';
@@ -217,9 +224,12 @@ export interface CashMove extends Base {
   category: string;
   biaya: boolean; // dihitung sebagai beban di laba rugi
   method: string; // Tunai = memengaruhi laci kas
+  /** v1.9: laci asal/tujuan. 'kamar' = laci meja kamar (kas kecil). Kosong = data lama: laci kasir pada shift-nya. */
+  drawer?: 'kasir' | 'kamar';
   amount: number;
   note?: string;
   user_id?: string;
+  user_name?: string;
 }
 
 export type PrintTarget = 'kasir' | 'produksi';

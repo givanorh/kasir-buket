@@ -1,5 +1,5 @@
 // Perhitungan murni (tanpa I/O) supaya mudah diuji: total keranjang, laporan, shift.
-import type { CashMove, CostItem, HppMethod, LoyaltyCfg, Order, OrderItem, Payment, Purchase, Shift, SurveyQuestion } from './types';
+import type { CashMove, CostItem, HppMethod, LoyaltyCfg, Order, OrderItem, PettyAnchor, Payment, Purchase, Shift, SurveyQuestion } from './types';
 import { answerOf } from './settings';
 import { allocCosts, type CostAlloc } from './costs';
 
@@ -169,7 +169,9 @@ export function shiftSummary(shift: Shift, payments: Payment[], moves: CashMove[
   const cashSales = ps.filter((p) => p.method === 'Tunai').reduce((s, p) => s + p.amount, 0);
   const non = new Map<string, number>();
   for (const p of ps) if (p.method !== 'Tunai') non.set(p.method, (non.get(p.method) || 0) + p.amount);
-  const ms = moves.filter((m) => m.shift_id === shift.id && !m.deleted && m.method === 'Tunai');
+  // laci kasir hanya untuk kembalian: kas keluar/masuk laci meja kamar (v1.9) tidak memengaruhi rekap shift.
+  // Data lama tanpa `drawer` tetap dihitung agar rekap shift lama tidak berubah.
+  const ms = moves.filter((m) => m.shift_id === shift.id && !m.deleted && m.method === 'Tunai' && (m.drawer ?? 'kasir') === 'kasir');
   const cashIn = ms.filter((m) => m.type === 'masuk').reduce((s, m) => s + m.amount, 0);
   const cashOut = ms.filter((m) => m.type === 'keluar').reduce((s, m) => s + m.amount, 0);
   return {
@@ -177,6 +179,25 @@ export function shiftSummary(shift: Shift, payments: Payment[], moves: CashMove[
     expected: shift.opening_cash + cashSales + cashIn - cashOut,
     nonCash: [...non.entries()].map(([method, amount]) => ({ method, amount })),
   };
+}
+
+export interface PettySummary { opening: number; since: string | null; cashIn: number; cashOut: number; balance: number; target: number; shortfall: number; moves: CashMove[] }
+
+/**
+ * Kas kecil laci meja kamar per cabang. Saldo = saldo hitung terakhir (anchor) + Σ masuk − Σ keluar sejak anchor.
+ * Tanpa anchor: saldo awal = jumlah tetap (target, bawaan 500.000) dan semua catatan laci meja kamar dihitung.
+ * shortfall = kekurangan terhadap jumlah tetap (nominal isi ulang).
+ */
+export function pettySummary(moves: CashMove[], outletId: string, target: number, anchor?: PettyAnchor | null): PettySummary {
+  const since = anchor?.at || null;
+  const ms = moves
+    .filter((m) => !m.deleted && m.drawer === 'kamar' && (!m.outlet_id || m.outlet_id === outletId) && (!since || (m.created_at || '') >= since))
+    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+  const cashIn = ms.filter((m) => m.type === 'masuk').reduce((s, m) => s + m.amount, 0);
+  const cashOut = ms.filter((m) => m.type === 'keluar').reduce((s, m) => s + m.amount, 0);
+  const opening = anchor ? anchor.opening : target;
+  const balance = opening + cashIn - cashOut;
+  return { opening, since, cashIn, cashOut, balance, target, shortfall: Math.max(0, target - balance), moves: ms };
 }
 
 /** Jumlah buket terjadwal per tanggal (untuk kontrol kapasitas hari ramai). */

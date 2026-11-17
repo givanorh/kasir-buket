@@ -77,7 +77,14 @@ export function pickSurvey(bank: SurveyQuestion[], n: number, rnd: () => number 
 /** Jawaban satu pertanyaan pada satu transaksi (mendukung kunci lama berupa teks pertanyaan). */
 export const answerOf = (survey: Record<string, string> | undefined, q: Pick<SurveyQuestion, 'id' | 'q'>) => survey?.[q.id] ?? survey?.[q.q] ?? '';
 
-export interface StoreCfg { florists: string[]; delivery: DeliveryCfg; loyalty: LoyaltyCfg; engage: EngageCfg; methods: string[] }
+/** Bawaan dua laci kas (v1.9): laci kasir hanya untuk kembalian, laci meja kamar = kas kecil untuk kas keluar/masuk. */
+export const DEFAULT_DRAWER_FLOAT = 1_000_000;
+export const DEFAULT_PETTY_TARGET = 500_000;
+/** Kategori kas kecil yang selalu tersedia, ditambah kategori kas keluar dari Pengaturan › Toko. */
+export const PETTY_CATEGORIES = ['Uang sampah', 'Sumbangan', 'Pembelian darurat'];
+export const PETTY_TOPUP = 'Isi ulang kas kecil';
+
+export interface StoreCfg { florists: string[]; delivery: DeliveryCfg; loyalty: LoyaltyCfg; engage: EngageCfg; methods: string[]; drawerFloat: number; pettyTarget: number }
 
 export function storeCfg(st?: Settings | null): StoreCfg {
   return {
@@ -86,5 +93,7 @@ export function storeCfg(st?: Settings | null): StoreCfg {
     loyalty: { ...DEFAULT_LOYALTY, ...(st?.loyalty || {}) },
     engage: { ...DEFAULT_ENGAGE, ...(st?.engagement || {}), survey: surveyBank(st?.engagement?.survey) },
     methods: st?.payment_methods?.length ? st.payment_methods : ['Tunai', 'QRIS', 'Transfer'],
+    drawerFloat: st?.drawer_float && st.drawer_float > 0 ? st.drawer_float : DEFAULT_DRAWER_FLOAT,
+    pettyTarget: st?.petty?.target && st.petty.target > 0 ? st.petty.target : DEFAULT_PETTY_TARGET,
   };
 }

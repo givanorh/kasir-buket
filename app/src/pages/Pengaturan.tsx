@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../lib/db';
-import { api, isNative, logout, useSession } from '../lib/session';
+import { api, isNative, useSession } from '../lib/session';
+import { useLogout } from '../components/Logout';
 import { sync, useSyncStatus } from '../lib/sync';
 import { getDeviceConfig, newId, save, setDeviceConfig, type DeviceConfig, type PrinterConfig, type PrinterMode } from '../lib/store';
 import { sendToPrinter, ThermalPrinter } from '../lib/print';
@@ -9,7 +10,7 @@ import { buildTest } from '../lib/print/receipts';
 import { planImport, runImport, type ImportPlan } from '../lib/kasirpintar';
 import { Badge, Empty, Field, Modal, MoneyInput, Seg, TabPanel, toast } from '../components/ui';
 import { Icon } from '../components/icons';
-import { DEFAULT_SURVEY, answerOf, storeCfg } from '../lib/settings';
+import { DEFAULT_DRAWER_FLOAT, DEFAULT_PETTY_TARGET, DEFAULT_SURVEY, answerOf, storeCfg } from '../lib/settings';
 import { REVIEW_ACCEPT_RATE, budgetLeft, budgetSuggestion, monthKey, monthStartIso, reviewTiers, reviewUsage, tierAmount } from '../lib/review';
 import { parseLocalInput } from '../lib/geo';
 import { num, rp } from '../lib/format';
@@ -21,11 +22,12 @@ import { fmtShort } from '../lib/format';
 export default function Pengaturan() {
   const s = useSession();
   const owner = s.user?.role === 'owner';
-  type Tab = 'perangkat' | 'printer' | 'toko' | 'promo' | 'perangkai' | 'survei' | 'pengguna' | 'email' | 'impor';
+  type Tab = 'perangkat' | 'printer' | 'reset' | 'toko' | 'promo' | 'perangkai' | 'survei' | 'pengguna' | 'email' | 'impor';
   const [tab, setTab] = useState<Tab>('perangkat');
   const tabs: { value: Tab; label: string }[] = [
     { value: 'perangkat', label: 'Perangkat' },
     { value: 'printer', label: 'Printer' },
+    ...(!owner ? [{ value: 'reset', label: 'Reset Password' }] as { value: Tab; label: string }[] : []),
     ...(owner ? [
       { value: 'toko', label: 'Toko & cabang' }, { value: 'promo', label: 'Promo, poin & ongkir' }, { value: 'perangkai', label: 'Perangkai' },
       { value: 'survei', label: 'Survei' }, { value: 'pengguna', label: 'Pengguna' }, { value: 'email', label: 'Reset Password' }, { value: 'impor', label: 'Impor Kasir Pintar' },
@@ -37,6 +39,7 @@ export default function Pengaturan() {
       <TabPanel k={tab} order={tabs.map((t) => t.value)}>
       {tab === 'perangkat' && <DeviceTab />}
       {tab === 'printer' && <PrinterTab />}
+      {tab === 'reset' && !owner && <SelfResetTab />}
       {tab === 'toko' && owner && <StoreTab />}
       {tab === 'pengguna' && owner && <UsersTab />}
       {tab === 'promo' && owner && <PromoTab />}
@@ -62,9 +65,11 @@ function DeviceTab() {
   const [cfg, setCfg] = useDeviceConfig();
   const code = s.device?.code || '';
   const owner = s.user?.role === 'owner';
+  const [requestLogout, logoutModal] = useLogout();
   if (!cfg) return null;
   return (
     <div className="stack">
+      {logoutModal}
       <div className="two">
         <section className="card">
           <h3>Perangkat ini</h3>
@@ -82,7 +87,7 @@ function DeviceTab() {
               {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
             </select>
           </Field>
-          <button className="btn danger" onClick={async () => { if (confirm('Keluar dari akun di perangkat ini? Data yang belum tersinkron tetap tersimpan.')) { sync.stop(); await logout(); } }}>Keluar</button>
+          <button className="btn danger" onClick={() => requestLogout('Keluar dari akun di perangkat ini? Data yang belum tersinkron tetap tersimpan.')}>Keluar</button>
         </section>
         <section className="card">
           <h3>Sinkronisasi otomatis</h3>
@@ -270,6 +275,11 @@ function StoreTab() {
           <Field label="DP default (%)"><input type="number" min={0} max={100} value={f.dp_min_percent ?? 50} onChange={(e) => setF({ ...f, dp_min_percent: Number(e.target.value) })} /></Field>
         </div>
         <Field label="Metode pembayaran (pisahkan koma)"><input value={f.payment_methods.join(', ')} onChange={(e) => setF({ ...f, payment_methods: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })} /></Field>
+        <h3>Laci kas</h3>
+        <div className="cols">
+          <Field label="Modal laci kasir" hint="Kas awal saat buka shift; hanya untuk kembalian"><MoneyInput value={f.drawer_float || DEFAULT_DRAWER_FLOAT} onChange={(v) => setF({ ...f, drawer_float: v })} ariaLabel="Modal laci kasir" /></Field>
+          <Field label="Jumlah tetap laci meja kamar" hint="Kas kecil untuk kas keluar/masuk"><MoneyInput value={f.petty?.target || DEFAULT_PETTY_TARGET} onChange={(v) => setF({ ...f, petty: { ...(f.petty || {}), target: v } })} ariaLabel="Jumlah tetap kas kecil" /></Field>
+        </div>
         <h3>Kategori kas keluar</h3>
         {f.expense_categories.map((c, i) => (
           <div key={i} className="row">
@@ -462,10 +472,58 @@ function PromoTab() {
   );
 }
 
-interface UserRow { id: string; username: string; name: string; email?: string | null; role: Role; active: number; outlet_id?: string | null; can_view?: boolean }
+const fmtDob = (d?: string | null) => (d ? new Date(`${d}T00:00:00`).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : '-');
+
+/** Owner: email pribadi, No HP, tanggal lahir pengguna. Dipakai sebagai verifikasi reset sandi mandiri; tidak ikut sinkron. */
+function PersonalModal({ u, onClose, onSave }: { u: UserRow; onClose: () => void; onSave: (body: { email: string; phone: string; birth_date: string }) => Promise<void> }) {
+  const [v, setV] = useState({ email: u.email || '', phone: u.phone || '', birth_date: u.birth_date || '' });
+  return (
+    <Modal title={`Data pribadi ${u.name}`} onClose={onClose}
+      footer={<button className="btn primary grow" onClick={() => onSave(v)} data-testid="simpan-data-pribadi">Simpan</button>}>
+      <div className="stack">
+        <Field label="Email pribadi"><input type="email" value={v.email} onChange={(e) => setV({ ...v, email: e.target.value })} autoCapitalize="none" aria-label="Email pribadi" /></Field>
+        <Field label="No HP"><input value={v.phone} onChange={(e) => setV({ ...v, phone: e.target.value })} inputMode="tel" placeholder="08…" aria-label="No HP" /></Field>
+        <Field label="Tanggal lahir"><input type="date" value={v.birth_date} onChange={(e) => setV({ ...v, birth_date: e.target.value })} aria-label="Tanggal lahir" /></Field>
+        <p className="muted small">{u.role === 'owner' ? 'Email owner menerima kode “Lupa kata sandi?” dan kalender event.' : 'Ketiganya dipakai sebagai verifikasi saat pengguna ini memakai menu Reset Password di Pengaturan akunnya; sandi baru dikirim ke email pribadi ini.'} Data hanya tersimpan di server, tidak dikirim ke perangkat lain.</p>
+      </div>
+    </Modal>
+  );
+}
+
+/** Kasir & perangkai: reset sandi sendiri. Verifikasi email pribadi + No HP + tanggal lahir; sandi baru dikirim ke email. */
+function SelfResetTab() {
+  const s = useSession();
+  const [v, setV] = useState({ email: '', phone: '', birth_date: '' });
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState('');
+  async function submit() {
+    setBusy(true);
+    try {
+      const r = await api<{ to: string }>('/api/auth/self-reset', { body: v });
+      setDone(r.to);
+      setV({ email: '', phone: '', birth_date: '' });
+      toast(`Sandi baru dikirim ke ${r.to}`);
+    } catch (e) { toast((e as Error).message, 'err'); } finally { setBusy(false); }
+  }
+  return (
+    <section className="card narrow" data-testid="reset-mandiri">
+      <h3>Reset password akun {s.user?.name}</h3>
+      <p className="muted small">Isi data pribadi Anda sesuai yang dicatat owner. Bila cocok, sistem membuat kata sandi baru dan langsung mengirimnya ke email pribadi Anda. Perangkat ini tetap masuk; sandi baru dipakai saat masuk berikutnya.</p>
+      <Field label="Email pribadi"><input type="email" value={v.email} onChange={(e) => setV({ ...v, email: e.target.value })} autoCapitalize="none" autoComplete="off" aria-label="Email pribadi" /></Field>
+      <Field label="No HP"><input value={v.phone} onChange={(e) => setV({ ...v, phone: e.target.value })} inputMode="tel" autoComplete="off" placeholder="08…" aria-label="No HP" /></Field>
+      <Field label="Tanggal lahir"><input type="date" value={v.birth_date} onChange={(e) => setV({ ...v, birth_date: e.target.value })} aria-label="Tanggal lahir" /></Field>
+      <button className="btn primary" disabled={busy || !v.email || !v.phone || !v.birth_date} onClick={submit} data-testid="kirim-reset-mandiri">{busy ? 'Memeriksa…' : 'Reset & kirim sandi baru ke email'}</button>
+      {done && <div className="note" data-testid="reset-terkirim">Sandi baru sudah dikirim ke <b>{done}</b>. Periksa juga folder Spam.</div>}
+      <p className="muted small">5 kali data salah = dikunci 15 menit. Bila data belum dicatat, minta owner mengisinya di Pengaturan › Pengguna › Data.</p>
+    </section>
+  );
+}
+
+interface UserRow { id: string; username: string; name: string; email?: string | null; phone?: string | null; birth_date?: string | null; role: Role; active: number; outlet_id?: string | null; can_view?: boolean }
 function UsersTab() {
   const [users, setUsers] = useState<UserRow[]>([]);
-  const [f, setF] = useState({ name: '', username: '', password: '', email: '', role: 'kasir' as Role, outlet_id: 'outlet-utama' });
+  const [f, setF] = useState({ name: '', username: '', password: '', email: '', phone: '', birth_date: '', role: 'kasir' as Role, outlet_id: 'outlet-utama' });
+  const [personal, setPersonal] = useState<UserRow | null>(null);
   const outlets = useLiveQuery(() => db.outlets.toArray(), []) || [];
   const [shown, setShown] = useState<Record<string, string>>({});
   const load = () => api<{ users: UserRow[] }>('/api/users').then((r) => setUsers(r.users)).catch((e) => toast(e.message, 'err'));
@@ -476,10 +534,10 @@ function UsersTab() {
   }
   useEffect(() => { load(); }, []);
   async function add() {
-    try { await api('/api/users', { body: f }); toast('Pengguna dibuat'); setF({ name: '', username: '', password: '', email: '', role: 'kasir', outlet_id: f.outlet_id }); load(); } catch (e) { toast((e as Error).message, 'err'); }
+    try { await api('/api/users', { body: f }); toast('Pengguna dibuat'); setF({ name: '', username: '', password: '', email: '', phone: '', birth_date: '', role: 'kasir', outlet_id: f.outlet_id }); load(); } catch (e) { toast((e as Error).message, 'err'); }
   }
   async function patch(id: string, body: object) {
-    try { await api(`/api/users/${id}`, { method: 'PATCH', body }); load(); toast('Disimpan'); } catch (e) { toast((e as Error).message, 'err'); }
+    try { await api(`/api/users/${id}`, { method: 'PATCH', body }); load(); toast('Disimpan'); return true; } catch (e) { toast((e as Error).message, 'err'); return false; }
   }
   return (
     <div className="stack">
@@ -491,7 +549,7 @@ function UsersTab() {
             <div key={u.id} className={`urow ${u.active ? '' : 'off'}`} data-testid="user-row">
               <div className="uwho">
                 <span className="avatar">{u.name.replace(/[^\p{L}\s]/gu, '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase()}</span>
-                <div className="grow"><b>{u.name}</b>{!u.active && <Badge tone="red">nonaktif</Badge>}<div className="muted">@{u.username} · {u.email || <span className="red">tanpa email</span>}</div>
+                <div className="grow"><b>{u.name}</b>{!u.active && <Badge tone="red">nonaktif</Badge>}<div className="muted">@{u.username} · {u.email || <span className="red">tanpa email</span>}{u.role !== 'owner' && (u.phone && u.birth_date ? ` · HP ${u.phone} · lahir ${fmtDob(u.birth_date)}` : <span className="red"> · data reset sandi belum lengkap</span>)}</div>
                   {shown[u.id] !== undefined && (
                     <div className="pwshow" data-testid="sandi-terlihat">Sandi <code>{shown[u.id]}</code>
                       <button className="linkish small" onClick={() => { navigator.clipboard?.writeText(shown[u.id]).then(() => toast('Sandi disalin')).catch(() => toast('Salin manual dari layar', 'err')); }}>Salin</button></div>
@@ -500,7 +558,7 @@ function UsersTab() {
               <select value={u.role} onChange={(e) => patch(u.id, { role: e.target.value })} aria-label={`Peran ${u.name}`}><option value="owner">Owner</option><option value="kasir">Admin</option><option value="perangkai">Perangkai</option></select>
               <select value={u.outlet_id || 'outlet-utama'} onChange={(e) => patch(u.id, { outlet_id: e.target.value })} aria-label={`Cabang ${u.name}`}>{outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select>
               <div className="uact">
-                <button className="btn small ghost" onClick={() => { const em = prompt(`Email untuk ${u.name} (kosongkan untuk menghapus)`, u.email || ''); if (em !== null) patch(u.id, { email: em }); }}>Email</button>
+                <button className="btn small ghost" onClick={() => setPersonal(u)} aria-label={`Data pribadi ${u.name}`} data-testid="data-pribadi">Data</button>
                 <button className="btn small ghost" onClick={() => reveal(u)} title={u.can_view ? 'Lihat sandi' : 'Sandi dipilih sendiri oleh pengguna: atur ulang lewat Sandi agar bisa dilihat'} data-testid="lihat-sandi"
                   aria-label={`${shown[u.id] !== undefined ? 'Sembunyikan' : 'Lihat'} sandi ${u.name}`}><Icon name={shown[u.id] !== undefined ? 'eyeoff' : 'eye'} size={16} />{shown[u.id] !== undefined ? 'Tutup' : 'Lihat'}</button>
                 <button className="btn small ghost" onClick={() => { const pw = prompt(`Kata sandi baru untuk ${u.name} (min. 6)`); if (pw) { patch(u.id, { password: pw }); const { [u.id]: _, ...rest } = shown; setShown(rest); } }}>Sandi</button>
@@ -517,13 +575,16 @@ function UsersTab() {
         <div className="formgrid">
           <Field label="Nama"><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
           <Field label="Username"><input value={f.username} onChange={(e) => setF({ ...f, username: e.target.value.toLowerCase() })} autoCapitalize="none" autoComplete="off" name="kb-new-username" data-lpignore="true" /></Field>
-          <Field label="Email (untuk reset kata sandi)"><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} autoCapitalize="none" autoComplete="off" /></Field>
+          <Field label="Email pribadi (untuk reset kata sandi)"><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} autoCapitalize="none" autoComplete="off" /></Field>
+          <Field label="No HP"><input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} inputMode="tel" autoComplete="off" placeholder="08…" /></Field>
+          <Field label="Tanggal lahir"><input type="date" value={f.birth_date} onChange={(e) => setF({ ...f, birth_date: e.target.value })} /></Field>
           <Field label="Kata sandi (min. 6)"><input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} autoComplete="new-password" name="kb-new-password" /></Field>
           <Field group label="Peran"><Seg value={f.role} onChange={(role) => setF({ ...f, role })} options={[{ value: 'kasir', label: 'Admin' }, { value: 'perangkai', label: 'Perangkai' }, { value: 'owner', label: 'Owner' }]} /></Field>
           <Field label="Cabang"><select value={f.outlet_id} onChange={(e) => setF({ ...f, outlet_id: e.target.value })}>{outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></Field>
         </div>
         <button className="btn primary" style={{ alignSelf: 'flex-start' }} disabled={!f.name || !f.username || f.password.length < 6} onClick={add}>Tambah pengguna</button>
       </section>
+      {personal && <PersonalModal u={personal} onClose={() => setPersonal(null)} onSave={async (body) => { if (await patch(personal.id, body)) setPersonal(null); }} />}
     </div>
   );
 }

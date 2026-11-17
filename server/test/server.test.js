@@ -334,3 +334,52 @@ test('v1.8 owner mengelola perangkat: daftar + riwayat login, ganti nama & kateg
   assert.equal(rec.data.name, 'Tablet Ruang Rangkai');
   assert.equal(rec.data.ua, 'Chrome · Android SM-A546E');
 });
+
+const lastBody = () => {
+  const raw = mails[mails.length - 1].raw;
+  return Buffer.from(raw.split('\n\n').slice(1).join('').replace(/\s/g, ''), 'base64').toString();
+};
+
+test('v1.9 reset sandi mandiri kasir/perangkai: verifikasi email + No HP + tanggal lahir, sandi baru dikirim ke email', async () => {
+  await startFakeSmtp();
+  assert.equal((await json('POST', '/api/email-config', { host: '127.0.0.1', port: smtpPort, user: 'toko@gmail.com', pass: 'app pass', from: 'toko@gmail.com' }, owner)).status, 200);
+  const users = (await json('GET', '/api/users', null, owner)).body.users;
+  const k1 = users.find((u) => u.username === 'kasir1');
+  const p1 = users.find((u) => u.username === 'rangkai1');
+  // data verifikasi belum lengkap → 409, owner tidak memakai menu ini → 403
+  await json('PATCH', `/api/users/${k1.id}`, { email: '' }, owner);
+  assert.equal((await json('POST', '/api/auth/self-reset', { email: 'x@y.co', phone: '0812', birth_date: '2000-01-01' }, kasir)).status, 409);
+  assert.equal((await json('POST', '/api/auth/self-reset', {}, owner)).status, 403);
+  // owner mengisi data: format dicek, No HP dinormalkan ke 08…
+  assert.equal((await json('PATCH', `/api/users/${k1.id}`, { birth_date: '1999-02-30' }, owner)).status, 400, '30 Februari ditolak');
+  assert.equal((await json('PATCH', `/api/users/${k1.id}`, { phone: '12345' }, owner)).status, 400);
+  assert.equal((await json('PATCH', `/api/users/${k1.id}`, { email: 'Kasir1@Example.com', phone: '+62 812-3456-7890', birth_date: '1999-04-12' }, owner)).status, 200);
+  const k1b = (await json('GET', '/api/users', null, owner)).body.users.find((u) => u.id === k1.id);
+  assert.deepEqual([k1b.email, k1b.phone, k1b.birth_date], ['kasir1@example.com', '081234567890', '1999-04-12']);
+  const pull = await json('GET', '/api/sync/pull?since=0', null, kasir);
+  assert.ok(!JSON.stringify(pull.body.changes.filter((c) => c.c === 'staff')).match(/081234567890|1999-04-12/), 'No HP & tanggal lahir tidak ikut sinkron');
+
+  // data salah → 400, sandi lama tetap
+  const before = mails.length;
+  const bad = await json('POST', '/api/auth/self-reset', { email: 'kasir1@example.com', phone: '081234567890', birth_date: '1999-04-13' }, kasir);
+  assert.equal(bad.status, 400);
+  assert.equal(mails.length, before, 'tidak ada email bila data salah');
+  // benar (huruf besar/kecil email & format HP berbeda tetap cocok) → sandi baru dikirim ke email pribadi
+  const ok = await json('POST', '/api/auth/self-reset', { email: ' KASIR1@example.com ', phone: '62 812 3456 7890', birth_date: '1999-04-12' }, kasir);
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.to, 'ka***@example.com');
+  assert.equal(mails.length, before + 1);
+  assert.match(mails.at(-1).raw, /To: <kasir1@example\.com>/);
+  const pw = lastBody().match(/\n {4}([A-Za-z0-9]{10})\n/)[1];
+  assert.match(pw, /[a-z]/); assert.match(pw, /[A-Z]/); assert.match(pw, /\d/);
+  assert.equal((await json('POST', '/api/auth/login', { username: 'kasir1', password: 'kasirBaru9' })).status, 401, 'sandi lama tidak berlaku');
+  assert.equal((await json('POST', '/api/auth/login', { username: 'kasir1', password: pw, deviceId: 'dev-kasir-2' })).status, 200, 'masuk dengan sandi dari email');
+  assert.equal((await json('GET', `/api/users/${k1.id}/password`, null, owner)).body.password, pw, 'sandi buatan server tetap bisa dilihat owner');
+  assert.equal((await json('GET', '/api/auth/me', null, kasir)).status, 200, 'perangkat yang sedang masuk tidak ikut keluar');
+
+  // perangkai: 5 kali salah → dikunci 15 menit walau data berikutnya benar
+  await json('PATCH', `/api/users/${p1.id}`, { email: 'sari@example.com', phone: '0813 1111 2222', birth_date: '2001-08-17' }, owner);
+  for (let i = 0; i < 5; i++) assert.equal((await json('POST', '/api/auth/self-reset', { email: 'sari@example.com', phone: '081311112222', birth_date: '2001-08-18' }, perangkai)).status, 400);
+  assert.equal((await json('POST', '/api/auth/self-reset', { email: 'sari@example.com', phone: '081311112222', birth_date: '2001-08-17' }, perangkai)).status, 429);
+  smtp.close();
+});

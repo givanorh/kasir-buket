@@ -291,10 +291,12 @@ export async function decideCancel(order: Order, approve: boolean, note = '') {
   else await save<Order>('orders', order.id, { cancel_request: decided });
 }
 
-export async function addCashMove(m: Omit<CashMove, 'id' | 'outlet_id' | 'shift_id' | 'user_id'>) {
+/** Catat kas masuk/keluar. Sejak v1.9 selalu laci meja kamar (kas kecil); shift aktif dicatat hanya sebagai jejak. */
+export async function addCashMove(m: Omit<CashMove, 'id' | 'outlet_id' | 'shift_id' | 'user_id' | 'drawer'>) {
   const cfg = await getDeviceConfig();
   const shift = await activeShift();
-  await save<CashMove>('cash_moves', newId('k'), { ...m, outlet_id: cfg.outletId, shift_id: shift?.id || null, user_id: getSession().user?.id });
+  const u = getSession().user;
+  await save<CashMove>('cash_moves', newId('k'), { ...m, drawer: 'kamar', outlet_id: cfg.outletId, shift_id: shift?.id || null, user_id: u?.id, user_name: u?.name });
 }
 
 export async function stockLevels(outletId?: string): Promise<Map<string, number>> {

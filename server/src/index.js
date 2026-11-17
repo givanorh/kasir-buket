@@ -6,6 +6,7 @@
 // - GET/POST /api/notify, POST /api/notify/test         (notifikasi & kalender perangkai, khusus owner)
 // - GET/POST /api/calsync                               (kalender event toko ke Google Calendar owner, khusus owner)
 // - GET/POST /api/geo-config, POST /api/geo/route       (ongkir: OpenRouteService, cadangan OSRM)
+// - POST /api/auth/self-reset                         (kasir/perangkai: verifikasi email + HP + tanggal lahir, sandi baru dikirim ke email)
 // - GET /api/devices, PATCH /api/devices/:id            (owner: daftar perangkat + riwayat login, ganti nama & kategori)
 // - POST /api/devices/code                             (versi lama: owner mengubah jenis/fungsi perangkatnya sendiri)
 // - selain /api: menyajikan aplikasi web (folder app/dist)
@@ -22,7 +23,7 @@ import { createNotifier } from './notify.js';
 import { createEventSync, KINDS as EV_KINDS } from './evsync.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const VERSION = '1.8.0';
+export const VERSION = '1.9.0';
 
 const ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
 const ROLES = ['owner', 'kasir', 'perangkai'];
@@ -78,6 +79,7 @@ export function createServer(opts = {}) {
   const { db } = store;
   const limiter = createLimiter();
   const forgotLimiter = createLimiter(3, 15 * 60 * 1000);
+  const selfResetLimiter = createLimiter(5, 15 * 60 * 1000); // per akun: 5 kali salah → kunci 15 menit
   const sendMailFn = opts.sendMail || sendMail;
   const fetchFn = opts.fetch || fetch;
   const osrmBase = opts.osrmUrl || process.env.OSRM_URL || 'https://router.project-osrm.org';
@@ -93,9 +95,10 @@ export function createServer(opts = {}) {
     countUsers: db.prepare('SELECT COUNT(*) AS n FROM users'),
     userByName: db.prepare('SELECT * FROM users WHERE username = ?'),
     userById: db.prepare('SELECT * FROM users WHERE id = ?'),
-    listUsers: db.prepare('SELECT id, username, name, email, role, active, outlet_id, created_at, (pw_view IS NOT NULL) AS can_view FROM users ORDER BY created_at'),
+    listUsers: db.prepare('SELECT id, username, name, email, phone, birth_date, role, active, outlet_id, created_at, (pw_view IS NOT NULL) AS can_view FROM users ORDER BY created_at'),
     setPwView: db.prepare('UPDATE users SET pw_view = ? WHERE id = ?'),
     insertUser: db.prepare('INSERT INTO users (id, username, name, role, pass, active, outlet_id, created_at, email) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)'),
+    setPersonal: db.prepare('UPDATE users SET phone = ?, birth_date = ? WHERE id = ?'),
     userByEmail: db.prepare('SELECT * FROM users WHERE lower(email) = lower(?)'),
     getCode: db.prepare('SELECT * FROM reset_codes WHERE user_id = ?'),
     putCode: db.prepare('INSERT INTO reset_codes (user_id, code_hash, expires_at, attempts) VALUES (?, ?, ?, 0) ON CONFLICT(user_id) DO UPDATE SET code_hash = excluded.code_hash, expires_at = excluded.expires_at, attempts = 0'),
@@ -237,6 +240,70 @@ export function createServer(opts = {}) {
     return v;
   }
   const maskEmail = (e) => e.replace(/^(.{1,2})[^@]*(@.*)$/, '$1***$2');
+  /** Nomor HP dibandingkan dalam bentuk 08…: spasi/tanda dibuang, awalan 62 / +62 menjadi 0. */
+  const normPhone = (p) => { const d = String(p || '').replace(/\D/g, ''); return d.startsWith('62') ? `0${d.slice(2)}` : d.startsWith('8') ? `0${d}` : d; };
+  function cleanPhone(p) {
+    const d = normPhone(p);
+    if (!d) return null;
+    if (!/^0\d{8,13}$/.test(d)) throw new HttpError(400, 'Nomor HP tidak valid (contoh 0812xxxxxxxx)');
+    return d;
+  }
+  function cleanBirth(b) {
+    const v = String(b || '').trim();
+    if (!v) return null;
+    const m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const d = m && new Date(`${v}T00:00:00Z`);
+    if (!m || isNaN(d) || d.toISOString().slice(0, 10) !== v || Number(m[1]) < 1930 || d > new Date()) throw new HttpError(400, 'Tanggal lahir tidak valid');
+    return v;
+  }
+  /** Sandi acak 10 karakter tanpa huruf/angka yang mirip (0/O, 1/l/I) agar mudah diketik dari email. */
+  function newPassword() {
+    const abc = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    let s = '';
+    while (!(/[a-z]/.test(s) && /[A-Z]/.test(s) && /\d/.test(s))) s = Array.from({ length: 10 }, () => abc[crypto.randomInt(abc.length)]).join('');
+    return s;
+  }
+
+  /**
+   * Reset sandi mandiri (Pengaturan › Reset Password, akun kasir/perangkai yang sedang masuk).
+   * Verifikasi: email pribadi + No HP + tanggal lahir harus sama dengan data yang diisi owner di Pengaturan › Pengguna.
+   * Sandi baru dibuat server dan dikirim ke email pribadi; sandi hanya diganti bila email terkirim.
+   */
+  async function handleSelfReset(user, body) {
+    if (!['kasir', 'perangkai'].includes(user.role)) throw new HttpError(403, 'Owner mengganti sandi lewat “Lupa kata sandi?” di halaman masuk');
+    const key = `self|${user.id}`;
+    if (selfResetLimiter.blocked(key)) throw new HttpError(429, 'Terlalu banyak percobaan. Coba lagi 15 menit lagi.');
+    const u = q.userById.get(user.id);
+    if (!u.email || !u.phone || !u.birth_date) {
+      throw new HttpError(409, 'Data verifikasi Anda belum lengkap. Minta owner mengisi email pribadi, No HP, dan tanggal lahir Anda di Pengaturan › Pengguna › Data.');
+    }
+    const cfg = emailConfig();
+    if (!cfg?.host) throw new HttpError(503, 'Email toko belum diatur owner (Pengaturan › Reset Password), jadi sandi baru belum bisa dikirim.');
+    const email = String(body.email || '').trim().toLowerCase();
+    const ok = email === u.email.toLowerCase() && normPhone(body.phone) === normPhone(u.phone) && String(body.birth_date || '').trim() === u.birth_date;
+    if (!ok) {
+      selfResetLimiter.fail(key);
+      throw new HttpError(400, 'Data tidak cocok dengan yang tercatat. Periksa email, No HP, dan tanggal lahir.');
+    }
+    const pw = newPassword();
+    try {
+      await sendMailFn(cfg, {
+        to: u.email,
+        subject: `Kata sandi baru ${storeName()}`,
+        text: `Halo ${u.name},\n\nKata sandi akun "${u.username}" di ${storeName()} sudah direset atas permintaan Anda dari menu Pengaturan › Reset Password.\n\nKata sandi baru:\n\n    ${pw}\n\nGunakan saat masuk berikutnya. Perangkat yang sedang masuk tidak ikut keluar. Bila Anda tidak meminta reset ini, segera hubungi owner.\n`,
+      });
+    } catch (e) {
+      console.error('Kirim sandi baru gagal:', e.message);
+      throw new HttpError(502, 'Email gagal dikirim, kata sandi lama tetap berlaku. Owner perlu memeriksa Pengaturan › Reset Password.');
+    }
+    store.tx(() => {
+      // sandi dibuat server (bukan pilihan pengguna): tetap bisa dilihat owner lewat tombol Lihat
+      db.prepare('UPDATE users SET pass = ?, pw_view = ? WHERE id = ?').run(hashPassword(pw), sealPassword(store.secret, pw), u.id);
+      q.delCode.run(u.id);
+    });
+    selfResetLimiter.reset(key);
+    return { ok: true, to: maskEmail(u.email) };
+  }
 
   // ---------- konfigurasi email (SMTP), disimpan di server saja, tidak ikut sinkron ----------
   function emailConfig() {
@@ -688,7 +755,7 @@ export function createServer(opts = {}) {
     }
     if (method === 'GET') return { users: q.listUsers.all().map((u) => ({ ...u, can_view: !!u.can_view })) };
     if (method === 'POST') {
-      const { name, username, password, role = 'kasir', outlet_id, email = '' } = body;
+      const { name, username, password, role = 'kasir', outlet_id, email = '', phone = '', birth_date = '' } = body;
       if (!name || !username || !password) throw new HttpError(400, 'Nama, username, dan kata sandi wajib diisi');
       if (!ROLES.includes(role)) throw new HttpError(400, 'Peran tidak dikenal');
       if (String(password).length < 6) throw new HttpError(400, 'Kata sandi minimal 6 karakter');
@@ -699,6 +766,7 @@ export function createServer(opts = {}) {
       store.tx(() => {
         q.insertUser.run(id, uname, name, role, hashPassword(password), outlet_id || 'outlet-utama', now(), normEmail(email));
         q.setPwView.run(sealPassword(store.secret, password), id);
+        q.setPersonal.run(cleanPhone(phone), cleanBirth(birth_date), id);
         mirrorUser(q.userById.get(id));
       });
       broadcast();
@@ -726,6 +794,8 @@ export function createServer(opts = {}) {
       }
       if (body.outlet_id) { sets.push('outlet_id = ?'); vals.push(String(body.outlet_id)); }
       if (typeof body.email === 'string') { sets.push('email = ?'); vals.push(normEmail(body.email)); }
+      if (typeof body.phone === 'string') { sets.push('phone = ?'); vals.push(cleanPhone(body.phone)); }
+      if (typeof body.birth_date === 'string') { sets.push('birth_date = ?'); vals.push(cleanBirth(body.birth_date)); }
       if (!sets.length) return { ok: true };
       store.tx(() => {
         db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...vals, target.id);
@@ -780,6 +850,7 @@ export function createServer(opts = {}) {
       if (route === 'POST /api/auth/reset') return send(res, 200, handleReset(await readJson(req)));
       const user = authUser(req, url);
       if (route === 'GET /api/auth/me') return send(res, 200, { user: { id: user.id, name: user.name, username: user.username, role: user.role, outlet_id: user.outlet_id }, device: q.deviceById.get(user.deviceId) || null });
+      if (route === 'POST /api/auth/self-reset') return send(res, 200, await handleSelfReset(user, await readJson(req)));
       if (route === 'GET /api/sync/pull') return send(res, 200, handlePull(url, user));
       if (route === 'POST /api/sync/push') return send(res, 200, handlePush(user, await readJson(req)));
       if (route === 'GET /api/events') {

@@ -26,7 +26,7 @@ export default function Kasir() {
   const stock = useLiveQuery(() => stockLevels(), []) || new Map<string, number>();
   const shift = useLiveQuery(async () => (await activeShift()) ?? null, []); // undefined = memuat, null = belum dibuka
   const role = useSession().user?.role;
-  const [opening, setOpening] = useState(0);
+  const [opening, setOpening] = useState<number | null>(null); // null = modal kembalian bawaan dari Pengaturan
   // animasi masuk berurutan hanya saat halaman pertama dibuka, bukan setiap kali mencari/memfilter
   const [enter, setEnter] = useState(true);
   useEffect(() => { if (!products.length) return; const t = setTimeout(() => setEnter(false), 1000); return () => clearTimeout(t); }, [products.length > 0]); // eslint-disable-line
@@ -87,8 +87,8 @@ export default function Kasir() {
         <div className="gate-mark"><Icon name="shift" size={28} /></div>
         <h2>Buka shift untuk mulai berjualan</h2>
         <p className="muted">Kasir hanya bisa dipakai setelah shift dibuka, agar uang di laci bisa direkap saat tutup shift. Owner tetap bisa berjualan tanpa shift.</p>
-        <Field label="Kas awal di laci"><MoneyInput value={opening} onChange={setOpening} ariaLabel="Kas awal" /></Field>
-        <button className="btn primary big" onClick={async () => { await openShift(opening); toast('Shift dibuka. Selamat berjualan'); }} data-testid="gate-buka-shift">Buka shift</button>
+        <Field label="Kas awal di laci kasir" hint={`Modal kembalian, biasanya ${rp(storeCfg(settings).drawerFloat)}`}><MoneyInput value={opening ?? storeCfg(settings).drawerFloat} onChange={setOpening} ariaLabel="Kas awal" /></Field>
+        <button className="btn primary big" onClick={async () => { await openShift(opening ?? storeCfg(settings).drawerFloat); toast('Shift dibuka. Selamat berjualan'); }} data-testid="gate-buka-shift">Buka shift</button>
       </div>
     ) : (
     <div className="pos">

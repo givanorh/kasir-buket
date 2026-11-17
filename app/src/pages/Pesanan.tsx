@@ -1,5 +1,6 @@
 // Riwayat transaksi: catatan saja. Tidak ada pelunasan, ubah status, atau pembatalan di sini
 // (semua aksi operasional ada di Produksi). Detail hanya menampilkan invoice dan status transaksi.
+// Akun perangkai (v1.9) melihat riwayat tanpa nominal uang: tiket produksi + status produksi.
 import { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../lib/db';
@@ -7,6 +8,7 @@ import { paymentStatus } from '../lib/calc';
 import { addDays, fmtDateTime, fmtShort, rp, startOfDay } from '../lib/format';
 import { docFor, printOrder } from '../lib/print';
 import { Badge, Empty, Modal, Seg, toast } from '../components/ui';
+import { useSession } from '../lib/session';
 import { Icon } from '../components/icons';
 import { ReceiptPreview } from '../components/ReceiptPreview';
 import { livePays, paidSum, payBadge, prodBadge } from '../components/Order';
@@ -17,6 +19,7 @@ type Filter = 'hari' | 'jadwal' | 'piutang' | '30';
 export default function Riwayat() {
   const [filter, setFilter] = useState<Filter>('hari');
   const [q, setQ] = useState('');
+  const money = useSession().user?.role !== 'perangkai';
   const [open, setOpen] = useState<string | null>(null);
   const orders = useLiveQuery(() => db.orders.toArray(), []) || [];
   const payments = useLiveQuery(() => db.payments.toArray(), []) || [];
@@ -42,7 +45,7 @@ export default function Riwayat() {
   return (
     <div className="page">
       <div className="toolbar">
-        <Seg value={filter} onChange={setFilter} options={[{ value: 'hari', label: 'Hari ini' }, { value: '30', label: '30 hari' }, { value: 'jadwal', label: 'Deadline' }, { value: 'piutang', label: 'Belum lunas' }]} />
+        <Seg value={filter} onChange={setFilter} options={[{ value: 'hari', label: 'Hari ini' }, { value: '30', label: '30 hari' }, { value: 'jadwal', label: 'Deadline' }, ...(money ? [{ value: 'piutang' as Filter, label: 'Belum lunas' }] : [])]} />
         <input className="grow" placeholder="Cari no / nama / HP" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
       <div className="table" style={{ ['--cols' as string]: '150px minmax(0,1fr) 170px 150px 110px 44px', ['--cols-sm' as string]: 'minmax(96px,auto) minmax(0,1fr) auto 40px' }}>
@@ -53,10 +56,12 @@ export default function Riwayat() {
               <div><b>{o.no}</b><div className="muted">{fmtShort(o.created_at)}</div></div>
               <div className="grow">{o.customer_name || 'Umum'}<div className="muted">{o.items.map((i) => `${i.qty}× ${i.name}`).join(', ')}</div></div>
               <div className="hide-sm">{o.fulfillment === 'sekarang' ? <span className="muted">ready</span> : <span>{o.fulfillment === 'antar' ? 'Antar' : 'Ambil'} {fmtShort(o.due_at)}</span>}</div>
-              <div className="right"><b>{rp(o.total)}</b><div>{o.void ? <Badge tone="red">Batal</Badge> : payBadge(paymentStatus(o.total, pd))}</div></div>
+              {money
+                ? <div className="right"><b>{rp(o.total)}</b><div>{o.void ? <Badge tone="red">Batal</Badge> : payBadge(paymentStatus(o.total, pd))}</div></div>
+                : <div className="right">{o.void ? <Badge tone="red">Batal</Badge> : prodBadge(o.production_status)}<div className="muted small">{o.florist || 'belum ditunjuk'}</div></div>}
               <div className="hide-sm">{prodBadge(o.production_status)}</div>
-              <button className="icon-btn" title="Cetak ulang struk" aria-label={`Cetak ulang struk ${o.no}`} data-testid="reprint"
-                onClick={async (e) => { e.stopPropagation(); const r = await printOrder(o, ['kasir'], { copyLabel: 'CETAK ULANG' }); toast(r[0].ok ? `Struk ${o.no} dikirim ke printer` : `Gagal: ${r[0].error}`, r[0].ok ? 'ok' : 'err'); }}>
+              <button className="icon-btn" title={money ? 'Cetak ulang struk' : 'Cetak ulang tiket produksi'} aria-label={`${money ? 'Cetak ulang struk' : 'Cetak ulang tiket produksi'} ${o.no}`} data-testid="reprint"
+                onClick={async (e) => { e.stopPropagation(); const r = await printOrder(o, [money ? 'kasir' : 'produksi'], { copyLabel: money ? 'CETAK ULANG' : undefined }); toast(r[0].ok ? `${money ? 'Struk' : 'Tiket'} ${o.no} dikirim ke printer` : `Gagal: ${r[0].error}`, r[0].ok ? 'ok' : 'err'); }}>
                 <Icon name="print" />
               </button>
             </div>
@@ -64,7 +69,7 @@ export default function Riwayat() {
         })}
         {!list.length && <Empty>Tidak ada transaksi.</Empty>}
       </div>
-      {sel && <RiwayatDetail order={sel} onClose={() => setOpen(null)} />}
+      {sel && (money ? <RiwayatDetail order={sel} onClose={() => setOpen(null)} /> : <RiwayatProduksi order={sel} onClose={() => setOpen(null)} />)}
     </div>
   );
 }
@@ -121,6 +126,37 @@ export function RiwayatDetail({ order, onClose }: { order: Order; onClose: () =>
           <div className="kv"><span>Total dibayar</span><b>{rp(paid)}</b></div>
           {!order.void && <div className="kv"><span>Sisa tagihan</span><b className={due ? 'red' : 'ok'} data-testid="riw-sisa">{due ? rp(due) : 'Lunas'}</b></div>}
           {!order.void && due > 0 && <p className="muted small">Pelunasan dilakukan kasir di menu Produksi (tombol Bayar pelunasan pada kartu pesanan).</p>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** Riwayat untuk akun perangkai: tiket produksi (tanpa harga) dan status produksi, tanpa nominal pembayaran. */
+function RiwayatProduksi({ order, onClose }: { order: Order; onClose: () => void }) {
+  const doc = useLiveQuery(() => docFor(order, 'tiket'), [order]);
+  async function reprint() {
+    const r = await printOrder(order, ['produksi']);
+    toast(r[0].ok ? (r[0].mode === 'relay' ? 'Dikirim ke stasiun cetak' : 'Dikirim ke printer') : `Gagal: ${r[0].error}`, r[0].ok ? 'ok' : 'err');
+  }
+  return (
+    <Modal title={`Pesanan ${order.no}`} onClose={onClose} wide
+      footer={<button className="btn grow" onClick={reprint}><Icon name="print" size={16} /> Cetak ulang tiket produksi</button>}>
+      <div className="detail" data-testid="riwayat-produksi">
+        <div className="stack">
+          <h3>Tiket produksi</h3>
+          {doc ? <ReceiptPreview doc={doc} width={58} testId="riw-tiket" /> : <p className="muted">Memuat…</p>}
+        </div>
+        <div className="stack">
+          <h3>Status produksi</h3>
+          <div className="kv"><span>Status</span><b>{order.void ? <Badge tone="red">Dibatalkan</Badge> : prodBadge(order.production_status)}</b></div>
+          <div className="kv"><span>Perangkai</span><b>{order.florist || 'belum ditunjuk'}</b></div>
+          <div className="kv"><span>Dibuat</span><b>{fmtDateTime(order.created_at)} · {order.cashier_name}</b></div>
+          <div className="kv"><span>Pengambilan</span><b>{order.fulfillment === 'sekarang' ? 'Ready' : `${order.fulfillment === 'antar' ? 'Diantar' : 'Diambil'} ${fmtDateTime(order.due_at)}`}</b></div>
+          {order.production_at && <div className="kv"><span>Mulai dirangkai</span><b>{fmtDateTime(order.production_at)}</b></div>}
+          {order.ready_at && <div className="kv"><span>Siap</span><b>{fmtDateTime(order.ready_at)}</b></div>}
+          {order.done_at && <div className="kv"><span>Diambil/diantar</span><b>{fmtDateTime(order.done_at)}</b></div>}
+          {order.void && <div className="note warn">Dibatalkan{order.void_at ? ` ${fmtDateTime(order.void_at)}` : ''}: {order.void_reason}</div>}
         </div>
       </div>
     </Modal>

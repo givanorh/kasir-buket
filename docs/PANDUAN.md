@@ -126,12 +126,12 @@ Tiket yang gagal tercetak tampil di menu Produksi dengan tombol “Ulangi gagal�
 Catatan: Chrome mungkin meminta Anda mengetik “allow pasting” sebelum bisa menempel kode di Console. Itu pengaman bawaan Chrome; jalankan hanya skrip yang Anda kenal.
 
 ## 7. Pemakaian Harian
-1. **Buka shift** (menu Shift, atau langsung di halaman Kasir): isi kas awal. Akun Admin dan Perangkai tidak bisa memakai Kasir sebelum shift dibuka; owner tetap bisa.
+1. **Buka shift** (menu Shift, atau langsung di halaman Kasir): kas awal laci kasir terisi otomatis Rp 1.000.000 (modal kembalian, bisa diubah). Akun Admin dan Perangkai tidak bisa memakai Kasir sebelum shift dibuka; owner tetap bisa.
 2. **Transaksi**: pilih produk › Bayar › isi pelanggan, pengambilan, kartu ucapan, catatan › pilih Lunas/DP › Simpan. Dua cetakan keluar otomatis.
 3. **Ruang perangkai** (akun perangkai): menu Produksi, ketuk “Mulai rangkai” › “Selesai dirangkai”. Status langsung terlihat di kasir.
 4. **Pengambilan & pelunasan DP** (akun kasir/Admin): Produksi › kolom Siap diambil/antar. Pesanan yang masih DP menampilkan **Bayar pelunasan** › pilih metode › Bayar; struk pelunasan tercetak otomatis. Setelah lunas, tombol berganti **Sudah diambil**.
-5. **Kas keluar** (beli plastik, ongkir kurir): menu Shift › Kas masuk/keluar.
-6. **Tutup shift**: hitung uang di laci, isi kas aktual, lihat selisih.
+5. **Kas keluar** (uang sampah, sumbangan, pembelian darurat): menu Shift › Laci meja kamar (kas kecil). Uang di laci kasir tidak dipakai untuk biaya, hanya untuk kembalian pelanggan.
+6. **Tutup shift**: hitung uang di laci kasir, isi kas aktual, tekan Tutup shift, periksa ringkasan selisih, lalu **Ya, tutup shift**.
 7. **Hari ramai** (Valentine, wisuda): isi kapasitas harian di Pengaturan › Toko. Kasir melihat peringatan saat tanggal pesanan sudah penuh; Laporan menampilkan jadwal 14 hari.
 
 Sinkron berjalan sendiri. Lencana di kanan atas: hijau “Tersinkron”, kuning “Menyinkron · n” (n perubahan sedang dikirim), merah “Offline · n menunggu” (tersimpan aman di perangkat, terkirim otomatis saat internet kembali).
@@ -238,6 +238,32 @@ Sinkron berjalan sendiri. Lencana di kanan atas: hijau “Tersinkron”, kuning 
    - Setelah server pindah ke VPS (bagian 3): ngrok tidak diperlukan lagi. Hapus agen ngrok dari PC, lalu di tiap perangkat buka alamat VPS dan masuk. Header `ngrok-skip-browser-warning` hanya dikirim bila alamat server mengandung "ngrok", jadi otomatis berhenti; pesan galat untuk jawaban non-JSON tetap berguna (mis. saat layanan di VPS sedang dimulai ulang).
 8. **Pembaruan sekali klik di PC toko**: klik dua kali `deploy\perbarui.bat`. Urutannya: (1) build aplikasi; (2) hentikan server lama, salin basis data ke `data\backups\sebelum-pembaruan-<waktu>-kasir.db` (5 set terakhir disimpan), jalankan server baru; (3) commit; (4) push ke GitHub. Bila build gagal, server tidak diubah. Hasil tiap langkah tercatat di `deploy\perbarui.log`. Karena repositori bersifat publik, berkas baru yang bukan berkas sumber (basis data, ekspor JSON, Excel/CSV, arsip, kunci) tidak pernah ikut commit otomatis dan hanya disebut di catatan.
 
+## 8f. Fitur Versi 1.9
+1. **Konfirmasi tutup shift**: tombol Tutup shift membuka ringkasan (kas seharusnya di laci kasir, kas aktual, selisih). Shift baru ditutup setelah **Ya, tutup shift**; Batal mengembalikan ke halaman Shift. Bila kas aktual belum diisi, muncul peringatan.
+2. **Pengingat saat keluar**: bila perangkat masih punya shift terbuka, menu Keluar/Ganti akun menampilkan pengingat dengan tiga pilihan: **Tutup shift dulu** (ke halaman Shift), **Tetap keluar** (shift tetap terbuka, bisa ditutup saat masuk lagi di perangkat ini), atau Batal.
+3. **Reset Password mandiri (Admin & Perangkai)**:
+   - Owner mengisi data tiap pengguna di Pengaturan › Pengguna › **Data**: email pribadi, No HP, tanggal lahir. No HP disimpan dalam bentuk 08… (+62 812-… menjadi 0812…). Data ini hanya tersimpan di server, tidak dikirim ke perangkat.
+   - Pengguna membuka Pengaturan › **Reset Password**, mengisi ketiga data. Bila cocok, server membuat sandi baru 10 karakter (huruf besar, huruf kecil, angka; tanpa 0/O, 1/l/I) dan mengirimnya ke email pribadi. Sandi lama hanya diganti bila email berhasil terkirim. Perangkat yang sedang masuk tidak ikut keluar.
+   - 5 kali data salah = dikunci 15 menit. Owner tetap bisa melihat sandi baru lewat tombol Lihat.
+   - Syarat: email toko sudah diatur di Pengaturan › Reset Password (akun owner).
+4. **Menu akun Perangkai**: Produksi, Riwayat, Pengaturan. Riwayat untuk perangkai tidak memuat nominal uang: daftar menampilkan status produksi dan perangkai; detail menampilkan tiket produksi (tanpa harga) dan waktu dibuat, mulai dirangkai, siap, diambil; tombol cetak ulang mencetak tiket produksi.
+5. **Kalender › Urutkan + Arah**: Tanggal (↑ Jan → Des / ↓ Des → Jan) dan Total omzet (↓ Terbesar dulu / ↑ Terkecil dulu). Nomor peringkat omzet tetap (1 = omzet terbesar) walau urutan dibalik.
+6. **Dua laci kas**:
+
+| | Laci kasir | Laci meja kamar (kas kecil) |
+|---|---|---|
+| Jumlah biasa | Rp 1.000.000 (modal kembalian) | Rp 500.000 (jumlah tetap) |
+| Isi | Modal + penjualan tunai | Kas kecil |
+| Kas keluar/masuk | Tidak bisa | Uang sampah, sumbangan, pembelian darurat; isi ulang dari owner |
+| Rekap | Saat tutup shift | Saldo berjalan, tidak ikut shift |
+
+   - Kas laci kasir seharusnya = kas awal + penjualan tunai. Contoh: 1.000.000 + 250.000 = 1.250.000.
+   - Saldo kas kecil = saldo awal + Σ kas masuk − Σ kas keluar. Contoh: 500.000 − 20.000 (uang sampah) − 50.000 (sumbangan) = 430.000. Tombol **Isi ulang Rp 70.000 ke Rp 500.000** mencatat kas masuk sebesar kekurangannya (500.000 − 430.000 = 70.000).
+   - Kas keluar yang melebihi saldo kas kecil ditolak.
+   - Owner bisa **Hitung ulang saldo**: mengisi uang yang benar-benar ada di laci meja kamar. Saldo dihitung dari angka itu mulai saat itu; catatan lama tetap tersimpan.
+   - Jumlah tetap kedua laci diatur di Pengaturan › Toko & cabang › Laci kas.
+   - Kas keluar berkategori beban tetap masuk laporan laba rugi seperti sebelumnya. Catatan kas keluar/masuk lama (sebelum v1.9) tetap dihitung di rekap shift tempat catatan itu dibuat, jadi riwayat shift lama tidak berubah.
+
 ## 9. Lupa Kata Sandi
 1. **Lewat email (disarankan).** Owner mengatur sekali: Pengaturan › Reset Password › Email Reset › isi **Akun GMAIL Toko** dan **Pass Email Toko** (*app password*: Akun Google › Keamanan › Verifikasi 2 Langkah aktif › myaccount.google.com/apppasswords) › Simpan › **Tes Email**. Lalu isi email tiap pengguna di Pengaturan › Pengguna. Di halaman masuk, ketuk **Lupa kata sandi?**, masukkan username atau email, masukkan kode 6 digit dari email (berlaku 15 menit), lalu buat sandi baru.
 2. **Staf lupa sandi**: owner cukup menekan tombol **Sandi** di Pengaturan › Pengguna.
@@ -293,6 +319,9 @@ Setiap basis data punya ID unik. Bila perangkat masuk ke server dengan ID berbed
 - **Denyut (heartbeat)**: pesan kecil berkala lewat SSE sebagai tanda saluran masih hidup.
 - **Hari-perangkat**: satuan pemakaian = 1 perangkat aktif selama 1 hari; 3 perangkat selama 30 hari = 90 hari-perangkat.
 - **User-Agent**: keterangan browser dan sistem yang dikirim perangkat pada setiap permintaan; dipakai untuk mengisi kolom info di daftar perangkat.
+- **Kas kecil (sistem imprest)**: dana tunai dengan jumlah tetap untuk pengeluaran kecil; setelah dipakai, diisi ulang sebesar yang terpakai sehingga kembali ke jumlah tetap.
+- **Modal kembalian (float)**: uang tunai awal di laci kasir untuk memberi kembalian; bukan untuk biaya.
+- **Selisih kas**: kas aktual − kas seharusnya; positif = lebih, negatif = kurang.
 - **Build**: mengubah kode sumber aplikasi menjadi berkas siap pakai di `app/dist` yang disajikan server.
 - **Commit / push**: commit menyimpan perubahan ke riwayat Git di PC; push mengirim riwayat itu ke GitHub.
 - **ID deterministik**: ID yang dihitung dari isi data, sehingga impor ulang berkas yang sama menghasilkan ID yang sama dan tidak menggandakan data.

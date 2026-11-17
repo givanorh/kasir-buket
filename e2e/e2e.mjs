@@ -127,9 +127,25 @@ try {
 
   // shift
   await A.goto(BASE + '/#/shift');
+  assert((await A.getByLabel('Kas awal').inputValue()) === '1.000.000', 'kas awal laci kasir terisi modal kembalian bawaan Rp 1.000.000');
   await A.locator('.money input').first().fill('200000');
   await A.getByTestId('btn-buka-shift').click();
   await A.getByTestId('expected').waitFor();
+  // dua laci: kas keluar/masuk hanya dari laci meja kamar (kas kecil), laci kasir hanya untuk kembalian
+  const exp0 = (await A.getByTestId('expected').textContent()).trim();
+  assert(/Rp\s?500\.000/.test(await A.getByTestId('saldo-kas-kecil').textContent()), 'kas kecil laci meja kamar mulai dari jumlah tetap Rp 500.000');
+  await A.getByLabel('Kategori kas kecil').selectOption('Uang sampah');
+  await A.getByLabel('Nominal kas kecil').fill('20000');
+  await A.getByTestId('catat-kas-kecil').click();
+  await A.getByTestId('saldo-kas-kecil').filter({ hasText: '480.000' }).waitFor();
+  assert((await A.getByTestId('expected').textContent()).trim() === exp0 && (await A.getByText('Kas keluar tunai').count()) === 0, `kas keluar Rp 20.000 (uang sampah): laci meja kamar 500.000 − 20.000 = 480.000; laci kasir tetap ${exp0}`);
+  await A.getByLabel('Nominal kas kecil').fill('600000');
+  assert(await A.getByTestId('catat-kas-kecil').isDisabled(), 'kas keluar Rp 600.000 melebihi saldo laci meja kamar Rp 480.000: tombol Catat nonaktif');
+  await A.getByLabel('Nominal kas kecil').fill('');
+  await A.getByTestId('isi-ulang').click();
+  await A.getByTestId('saldo-kas-kecil').filter({ hasText: /Rp\s?500\.000/ }).waitFor();
+  assert((await A.getByTestId('kas-kecil-row').count()) === 2, 'isi ulang Rp 20.000 dicatat sebagai kas masuk; saldo kembali Rp 500.000');
+  await A.getByTestId('kas-kecil').screenshot({ path: path.join(SHOTS, '25-kas-kecil.png') });
 
   // transaksi 1: pesanan besok, DP, QRIS
   await A.goto(BASE + '/#/kasir');
@@ -213,6 +229,17 @@ try {
   assert(/PERANGKAI : NAZRA/.test(tiket), 'tiket mencantumkan perangkai yang ditunjuk (Nazra)');
   console.log(tiket);
   await B.screenshot({ path: path.join(SHOTS, '4-produksi-hp.png') });
+  // akun perangkai: menu hanya Produksi, Riwayat, Pengaturan; Riwayat tanpa nominal uang
+  const navB = (await B.locator('nav.side a').allTextContents()).map((t) => t.replace(/\d+$/, '').trim());
+  assert(navB.join(',') === 'Produksi,Riwayat,Pengaturan', `menu akun perangkai: ${navB.join(' › ')}`);
+  await B.goto(BASE + '/#/riwayat');
+  await B.getByTestId('order-row').first().waitFor();
+  assert(!/Rp/.test(await B.locator('.table').textContent()) && (await B.getByRole('radio', { name: 'Belum lunas' }).count()) === 0, 'Riwayat perangkai tanpa nominal dan tanpa filter Belum lunas');
+  await B.getByTestId('order-row').first().click();
+  const tiketRiw = await B.getByTestId('riw-tiket').textContent();
+  assert(/TIKET PRODUKSI/.test(tiketRiw) && !/Rp|TOTAL/.test(await B.getByTestId('riwayat-produksi').textContent()), 'detail Riwayat perangkai: tiket produksi + status, tanpa harga');
+  await B.keyboard.press('Escape');
+  await B.goto(BASE + '/#/produksi');
   await B.getByRole('button', { name: 'Mulai rangkai' }).click();
 
   // A melihat status produksi & status job cetak berubah tanpa tombol sinkron
@@ -448,8 +475,20 @@ try {
   await A.getByTestId('urut-omzet').waitFor();
   assert((await A.getByTestId('rank-row').count()) === nMomen && nMomen > 5, `filter Puncak Penjualan + urut total omzet: ${nMomen} event berperingkat`);
   await A.screenshot({ path: path.join(SHOTS, '22-kalender-urut-omzet.png'), fullPage: true });
+  const rankNos = async () => (await A.locator('[data-testid=rank-row] .rank-no').allTextContents()).map(Number);
+  const desc = await rankNos();
+  await A.getByRole('radio', { name: /Terkecil dulu/ }).click();
+  const asc = await rankNos();
+  assert(desc[0] === 1 && asc[0] === nMomen && asc.join() === [...desc].reverse().join(), `omzet: terbesar dulu (peringkat ${desc[0]} di atas) ↔ terkecil dulu (peringkat ${asc[0]} di atas)`);
   await A.getByRole('radio', { name: 'Tanggal' }).click();
   await A.getByTestId('filter-kategori').getByRole('button', { name: /Semua/ }).click();
+  const monthOrder = async () => (await A.locator('.card.month h3').allTextContents()).map((t) => t.trim());
+  const naik = await monthOrder();
+  await A.getByRole('radio', { name: /Des → Jan/ }).click();
+  const turun = await monthOrder();
+  const dates = await A.locator('[data-testid=event-row] .ev-date').allTextContents();
+  assert(naik[0].startsWith('Januari') && turun[0].startsWith('Desember') && turun.join() === [...naik].reverse().join(), `tanggal: Jan → Des (${naik[0]} di atas) ↔ Des → Jan (${turun[0]} di atas, ${dates[0].trim()} pertama)`);
+  await A.getByRole('radio', { name: /Jan → Des/ }).click();
   const agu = A.getByTestId('event-row').filter({ hasText: 'Puncak awal Agustus' });
   await agu.getByTestId('jadikan-rutin').click();
   assert((await A.getByTestId('event-nama').inputValue()) === 'National Girlfriend Day (1 Agu)' && await A.getByTestId('event-rutin').isChecked(), 'lonjakan 1 Agustus diusulkan menjadi event rutin "National Girlfriend Day (1 Agu)"');
@@ -620,6 +659,65 @@ try {
   await D.getByTestId('cancel-pending').waitFor({ state: 'detached', timeout: 15000 });
   await D.getByText(/Dibatalkan: Pelanggan salah pilih produk \(diajukan Tiara, disetujui Vano\)/).waitFor({ timeout: 15000 });
   assert(true, 'owner menyetujui → pesanan batal, alasan & nama penyetuju tercatat, tampil di perangkat Admin');
+
+  // ---------- reset sandi mandiri Admin (email pribadi + No HP + tanggal lahir) ----------
+  await A.goto(BASE + '/#/pengaturan');
+  await A.getByRole('radio', { name: 'Pengguna' }).click();
+  await A.getByRole('button', { name: 'Data pribadi Tiara' }).click();
+  const dlg = A.getByRole('dialog', { name: 'Data pribadi Tiara' });
+  await dlg.getByLabel('Email pribadi').fill('tiara@example.com');
+  await dlg.getByLabel('No HP').fill('0812 7777 8888');
+  await dlg.getByLabel('Tanggal lahir').fill('2002-05-14');
+  await dlg.getByTestId('simpan-data-pribadi').click();
+  await A.getByTestId('user-row').filter({ hasText: '@tiara' }).filter({ hasText: 'HP 081277778888' }).waitFor();
+  assert(true, 'owner mencatat email pribadi, No HP (dinormalkan 081277778888), dan tanggal lahir Tiara');
+  await A.goto(BASE + '/#/produksi');
+  await D.goto(BASE + '/#/pengaturan');
+  await D.getByRole('radio', { name: 'Reset Password' }).click();
+  const rs = D.getByTestId('reset-mandiri');
+  await rs.getByLabel('Email pribadi').fill('tiara@example.com');
+  await rs.getByLabel('No HP').fill('+62 812-7777-8888');
+  await rs.getByLabel('Tanggal lahir').fill('2002-05-15');
+  const nMail = mails.length;
+  await rs.getByTestId('kirim-reset-mandiri').click();
+  await D.getByText(/Data tidak cocok/).waitFor();
+  assert(mails.length === nMail, 'tanggal lahir salah: ditolak, tidak ada email terkirim');
+  await rs.getByLabel('Tanggal lahir').fill('2002-05-14');
+  await rs.getByTestId('kirim-reset-mandiri').click();
+  await D.getByTestId('reset-terkirim').waitFor();
+  const mailT = mails.at(-1);
+  const pwT = Buffer.from(mailT.split('\n\n').slice(1).join('').replace(/\s/g, ''), 'base64').toString().match(/\n {4}([A-Za-z0-9]{10})\n/)[1];
+  assert(mails.length === nMail + 1 && mailT.includes('To: <tiara@example.com>'), `data cocok: sandi baru 10 karakter dikirim ke email pribadi Tiara (${(await D.getByTestId('reset-terkirim').textContent()).trim()})`);
+  await D.getByTestId('reset-mandiri').screenshot({ path: path.join(SHOTS, '26-reset-mandiri.png') });
+
+  // ---------- keluar saat shift terbuka: pengingat, lalu tutup shift dengan konfirmasi ----------
+  await D.getByTestId('user-menu').click();
+  await D.getByRole('menuitem', { name: 'Keluar' }).click();
+  await D.getByTestId('pengingat-shift').waitFor();
+  assert(await D.getByTestId('keluar-tanpa-tutup').isVisible(), 'Admin keluar saat shift masih terbuka: muncul pengingat, pilihan "Tutup shift dulu" atau "Tetap keluar"');
+  await D.screenshot({ path: path.join(SHOTS, '27-pengingat-shift.png') });
+  await D.getByTestId('ke-tutup-shift').click();
+  await D.getByTestId('btn-tutup-shift').waitFor();
+  const expD = (await D.getByTestId('expected').textContent()).replace(/\D/g, '');
+  await D.getByLabel('Kas aktual').fill(expD);
+  await D.getByTestId('btn-tutup-shift').click();
+  await D.getByTestId('ringkasan-tutup-shift').waitFor();
+  await D.getByRole('button', { name: 'Batal' }).click();
+  assert(await D.getByTestId('shift-aktif').isVisible(), 'tombol Tutup shift tidak langsung menutup: konfirmasi dibatalkan, shift tetap aktif');
+  await D.getByTestId('btn-tutup-shift').click();
+  assert(/Selisih\s*Rp\s?0/.test(await D.getByTestId('ringkasan-tutup-shift').textContent()), 'konfirmasi menampilkan kas seharusnya, kas aktual, selisih Rp 0');
+  await D.screenshot({ path: path.join(SHOTS, '28-konfirmasi-tutup-shift.png') });
+  await D.getByTestId('konfirmasi-tutup-shift').click();
+  await D.getByTestId('btn-buka-shift').waitFor();
+  assert(true, 'shift ditutup setelah konfirmasi');
+  await D.getByTestId('user-menu').click();
+  await D.getByRole('menuitem', { name: 'Keluar' }).click();
+  await D.getByRole('button', { name: 'Masuk' }).waitFor();
+  await D.getByLabel('Username').fill('tiara');
+  await D.getByLabel('Kata sandi').fill(pwT);
+  await D.getByRole('button', { name: 'Masuk' }).click();
+  await D.getByTestId('sync-badge').waitFor({ timeout: 10000 });
+  assert(true, 'tanpa shift terbuka, keluar langsung; masuk lagi dengan sandi baru dari email berhasil');
   await ctxD.close();
 
   // ---------- notifikasi perangkai + undangan Google Calendar ----------

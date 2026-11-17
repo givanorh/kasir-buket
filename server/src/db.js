@@ -102,6 +102,9 @@ export function openDb(dataDir) {
   if (!userCols.includes('email')) db.exec('ALTER TABLE users ADD COLUMN email TEXT');
   // migrasi v1.6: salinan sandi terenkripsi untuk fitur "Lihat sandi" owner (NULL = tidak bisa dilihat)
   if (!userCols.includes('pw_view')) db.exec('ALTER TABLE users ADD COLUMN pw_view TEXT');
+  // migrasi v1.9: data verifikasi reset sandi mandiri (diisi owner; tidak ikut sinkron ke perangkat)
+  if (!userCols.includes('phone')) db.exec('ALTER TABLE users ADD COLUMN phone TEXT');
+  if (!userCols.includes('birth_date')) db.exec('ALTER TABLE users ADD COLUMN birth_date TEXT');
   // migrasi v1.8: keterangan perangkat hasil pengenalan otomatis (browser + sistem) dan jumlah login
   const devCols = db.prepare('PRAGMA table_info(devices)').all().map((c) => c.name);
   if (!devCols.includes('ua')) db.exec('ALTER TABLE devices ADD COLUMN ua TEXT');

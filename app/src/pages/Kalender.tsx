@@ -37,6 +37,9 @@ export default function Kalender() {
   const [year, setYear] = useState(new Date().getFullYear());
   const [kind, setKind] = useState<EventKind | ''>('');
   const [sort, setSort] = useState<'tanggal' | 'omzet'>('tanggal');
+  // arah urutan: tanggal bawaan naik (Jan → Des), omzet bawaan turun (terbesar dulu)
+  const [dir, setDir] = useState<'asc' | 'desc'>('asc');
+  const pickSort = (v: 'tanggal' | 'omzet') => { setSort(v); setDir(v === 'tanggal' ? 'asc' : 'desc'); };
   const [edit, setEdit] = useState<Partial<CalEvent> | null>(null);
   const [formTitle, setFormTitle] = useState('');
   const [gcal, setGcal] = useState(false);
@@ -62,7 +65,11 @@ export default function Kalender() {
   const kindOf = (k: EventKind): EventKind => (k === 'musim' ? 'momen' : k);
   const shown = ofYear.filter((e) => !kind || kindOf(e.kind) === kind);
   const countOf = (k: EventKind) => ofYear.filter((e) => kindOf(e.kind) === k && e.date.startsWith(String(year))).length;
-  const ranked = sort === 'omzet' ? omzetRank(shown.filter((e) => e.date.startsWith(String(year))), dl) : [];
+  const ranked = sort === 'omzet' ? omzetRank(shown.filter((e) => e.date.startsWith(String(year))), dl).map((x, i) => ({ ...x, rank: i + 1 })) : [];
+  const rankedView = dir === 'desc' ? ranked : [...ranked].reverse();
+  const months = BULAN.map((m, i) => ({ m, i }));
+  const monthsView = dir === 'asc' ? months : [...months].reverse();
+  const byDate = (a: { date: string }, b: { date: string }) => (dir === 'asc' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date));
   const maxRank = Math.max(1, ...ranked.map((x) => x.sales));
   const today = localDay(new Date());
   const thisYear = Number(today.slice(0, 4));
@@ -87,7 +94,10 @@ export default function Kalender() {
     <div className="page" data-testid="kalender">
       <div className="toolbar">
         <Seg value={String(year)} onChange={(v) => setYear(Number(v))} options={years.map((y) => ({ value: String(y), label: String(y) }))} />
-        <Field group label="Urutkan"><Seg value={sort} onChange={setSort} options={[{ value: 'tanggal', label: 'Tanggal' }, { value: 'omzet', label: 'Total omzet' }]} /></Field>
+        <Field group label="Urutkan"><Seg value={sort} onChange={pickSort} options={[{ value: 'tanggal', label: 'Tanggal' }, { value: 'omzet', label: 'Total omzet' }]} /></Field>
+        <Field group label="Arah"><Seg value={dir} onChange={setDir} options={sort === 'tanggal'
+          ? [{ value: 'asc', label: '↑ Jan → Des' }, { value: 'desc', label: '↓ Des → Jan' }]
+          : [{ value: 'desc', label: '↓ Terbesar dulu' }, { value: 'asc', label: '↑ Terkecil dulu' }]} /></Field>
         <span className="grow" />
         {missingDefaults.length > 0 && missingDefaults.length < DEFAULT_EVENTS_2026.length && <button className="btn ghost" onClick={() => saveMany(missingDefaults.map(({ id, ...p }) => ({ c: 'events' as const, id, patch: p })))}>Pulihkan {missingDefaults.length} event bawaan</button>}
         {missingDefaults.length === DEFAULT_EVENTS_2026.length && <button className="btn" onClick={() => saveMany(missingDefaults.map(({ id, ...p }) => ({ c: 'events' as const, id, patch: p })))} data-testid="isi-2026">Isi event 2026</button>}
@@ -142,11 +152,11 @@ export default function Kalender() {
 
       {sort === 'omzet' && (
         <section className="card" data-testid="urut-omzet">
-          <h3>Event {year} menurut total omzet{kind ? ` · ${KIND_LABEL[kind]}` : ''}</h3>
+          <h3>Event {year} menurut total omzet{kind ? ` · ${KIND_LABEL[kind]}` : ''} · {dir === 'desc' ? 'terbesar dulu' : 'terkecil dulu'}</h3>
           <p className="muted small">Total omzet selama rentang event. Event yang belum terjadi memakai omzet tanggal yang sama tahun lalu.</p>
-          {ranked.map((x, i) => (
+          {rankedView.map((x) => (
             <div key={x.e.baseId + x.e.date} className="ev rank" data-testid="rank-row">
-              <div className="rank-no">{i + 1}</div>
+              <div className="rank-no">{x.rank}</div>
               <div className="ev-main">
                 <div><b>{x.e.name}</b> <Badge tone={TONE[x.e.kind]}>{KIND_LABEL[x.e.kind]}</Badge> <span className="muted small">{range(x.e)}</span></div>
                 <div className="rank-bar"><i style={{ width: `${(x.sales / maxRank) * 100}%` }} /></div>
@@ -158,8 +168,8 @@ export default function Kalender() {
         </section>
       )}
 
-      {sort === 'tanggal' && BULAN.map((m, i) => {
-        const xs = shown.filter((e) => Number(e.date.slice(5, 7)) === i + 1 && e.date.startsWith(String(year)));
+      {sort === 'tanggal' && monthsView.map(({ m, i }) => {
+        const xs = shown.filter((e) => Number(e.date.slice(5, 7)) === i + 1 && e.date.startsWith(String(year))).sort(byDate);
         if (!xs.length) return null;
         return (
           <section key={m} className="card month">
